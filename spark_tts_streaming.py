@@ -14,6 +14,7 @@ import re
 from typing import Optional, List
 from pathlib import Path
 import traceback
+from huggingface_hub import snapshot_download
 
 # IMPORTANT: Add the Spark-TTS GitHub repo to sys.path for BiCodecTokenizer import
 import sys
@@ -25,8 +26,6 @@ from sparktts.models.audio_tokenizer import BiCodecTokenizer  # Import from clon
 CUDA_VISIBLE_DEVICES = os.environ.get("CUDA_VISIBLE_DEVICES", "0")
 VLLM_BASE_URL = os.environ.get("VLLM_BASE_URL", "http://0.0.0.0:8002/v1")
 MODEL_NAME = os.environ.get("MODEL_NAME", "crestai/spark-tts-nexvox")  # Fine-tuned LLM model
-AUDIO_TOKENIZER_MODEL_DIR = "Spark-TTS"  # Default: cloned repo directory
-
 VLLM_API_KEY = os.environ.get("VLLM_API_KEY", "token123")
 
 os.environ["CUDA_VISIBLE_DEVICES"] = CUDA_VISIBLE_DEVICES
@@ -40,8 +39,8 @@ DEFAULT_REPETITION_PENALTY = 1.0
 AUDIO_SAMPLERATE = 16000  # BiCodec default sample rate
 AUDIO_CHANNELS = 1
 
-STREAM_CHUNK_SIZE_TOKENS = 50
-INITIAL_CHUNK_SIZE_TOKENS = 20
+STREAM_CHUNK_SIZE_TOKENS = 50  # Process audio every 50 semantic tokens
+INITIAL_CHUNK_SIZE_TOKENS = 20  # Smaller initial chunk for faster first audio
 
 app = FastAPI()
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -61,58 +60,62 @@ def initialize_models():
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
     print("Text tokenizer loaded")
     
-    print("Loading BiCodec audio tokenizer...")
+    print("Downloading and initializing BiCodec audio tokenizer...")
     try:
-        # First, try the cloned Spark-TTS repo (recommended)
-        repo_path = Path(AUDIO_TOKENIZER_MODEL_DIR)
-        if not repo_path.exists():
-            print(f"Cloned repo not found at {repo_path}. Falling back to download BiCodec checkpoint.")
-            # Download the correct BiCodec model from SparkAudio
-            from huggingface_hub import snapshot_download
-            repo_path = snapshot_download(
-                repo_id="SparkAudio/BiCodec",
-                local_dir="./models/bicodec",
+        model_base_repo = "unsloth/Spark-TTS-0.5B"
+        cache_dir = "Spark-TTS-0.5B"  # Local cache folder
+
+        # Download only the tokenizer files (BiCodec + wav2vec2), skip LLM
+        if not os.path.exists(cache_dir):
+            print(f"Downloading tokenizer files from {model_base_repo}...")
+            snapshot_download(
+                repo_id=model_base_repo,
+                local_dir=cache_dir,
+                ignore_patterns=["*LLM*", "*model.safetensors*"],  # Skip LLM files and any extra safetensors
                 local_dir_use_symlinks=False,
-                allow_patterns=["*"]  # Download everything
             )
-        
-        print(f"Using BiCodec model directory: {repo_path}")
-        
+            print(f"✅ Tokenizer files downloaded to {cache_dir}")
+        else:
+            print(f"Using existing tokenizer files at {cache_dir}")
+
         # Verify key files
-        bicodec_model_path = repo_path / "model.safetensors"
-        wav2vec2_path = repo_path / "wav2vec2-large-xlsr-53"
-        if not bicodec_model_path.exists():
-            raise FileNotFoundError(f"BiCodec model weights not found at {bicodec_model_path}")
-        if not wav2vec2_path.exists():
-            print("Warning: wav2vec2-large-xlsr-53 not found. BiCodec may still work if pre-downloaded.")
+        bicodec_path = Path(cache_dir) / "BiCodec"
+        bicodec_model = bicodec_path / "model.safetensors"
+        bicodec_config = bicodec_path / "config.yaml"
         
-        # Initialize BiCodecTokenizer
+        if not bicodec_model.exists():
+            raise FileNotFoundError(f"BiCodec model weights not found at {bicodec_model}")
+        if not bicodec_config.exists():
+            raise FileNotFoundError(f"BiCodec config not found at {bicodec_config}")
+        
+        print(f"BiCodec files verified:")
+        print(f"  - Model: {bicodec_model}")
+        print(f"  - Config: {bicodec_config}")
+
+        # Initialize the audio tokenizer
+        print("Initializing audio tokenizer...")
         audio_tokenizer = BiCodecTokenizer(
-            model_dir=str(repo_path),
+            model_dir=cache_dir,
             device=DEVICE
         )
         
-        if audio_tokenizer is None:
-            raise RuntimeError("BiCodecTokenizer initialization returned None")
-        
-        print(f"✓ BiCodec audio tokenizer loaded successfully on {DEVICE}")
+        print(f"✅ Audio tokenizer initialized on {DEVICE}")
         
     except Exception as e:
         print(f"ERROR: Failed to load BiCodec tokenizer: {e}")
         traceback.print_exc()
         raise RuntimeError(
-            f"Could not load BiCodec tokenizer. "
-            "Ensure you have cloned https://github.com/SparkAudio/Spark-TTS "
-            "or the BiCodec model is downloaded correctly."
+            f"Could not load BiCodec tokenizer from {model_base_repo}. "
+            "See error details above."
         )
     
     print("Models initialized successfully")
     print(f"Architecture: vLLM serves fine-tuned LLM ({MODEL_NAME}), "
-          f"local BiCodec decodes audio")
+          f"local BiCodec decodes audio ({cache_dir})")
 
 class AudioRequest(BaseModel):
     text: str
-    voice: Optional[str] = None
+    voice: Optional[str] = None  # e.g., "248" for Luganda female
     temperature: float = DEFAULT_TEMPERATURE
     top_p: float = DEFAULT_TOP_P
     top_k: int = DEFAULT_TOP_K
@@ -122,6 +125,7 @@ class AudioRequest(BaseModel):
 def format_prompt_for_spark(text: str, voice: Optional[str] = None) -> str:
     if voice:
         text = f"{voice}: {text}"
+    
     prompt = "".join([
         "<|task_tts|>",
         "<|start_content|>",
@@ -129,6 +133,7 @@ def format_prompt_for_spark(text: str, voice: Optional[str] = None) -> str:
         "<|end_content|>",
         "<|start_global_token|>"
     ])
+    
     return prompt
 
 def extract_tokens_from_text(text: str) -> tuple[List[int], List[int]]:
@@ -156,8 +161,8 @@ def decode_audio_chunk(
     
     with torch.no_grad():
         wav_np = audio_tokenizer.detokenize(
-            pred_global_ids.squeeze(0),
-            pred_semantic_ids
+            pred_global_ids.squeeze(0),  # (N_global,)
+            pred_semantic_ids            # (1, N_semantic)
         )
     
     return wav_np
@@ -259,7 +264,7 @@ async def generate_audio_chunks(
                         
                         processed_semantic_count = end_idx
         
-        # Process remaining tokens
+        # Process remaining tokens after stream ends
         semantic_tokens, global_tokens = await loop.run_in_executor(
             None, extract_tokens_from_text, accumulated_text
         )
@@ -380,7 +385,7 @@ async def read_root():
     return {
         "message": "Spark TTS Streaming API (Fine-tuned for East African Languages)",
         "llm_model": MODEL_NAME,
-        "audio_tokenizer": AUDIO_TOKENIZER_MODEL_DIR,
+        "audio_tokenizer": "Spark-TTS-0.5B (BiCodec)",
         "sample_rate": AUDIO_SAMPLERATE,
         "available_voices": {
             "241": "Acholi (female)",
@@ -402,7 +407,7 @@ async def health_check():
         "status": "healthy" if tokenizer is not None and audio_tokenizer is not None else "initializing",
         "device": DEVICE,
         "llm_model": MODEL_NAME,
-        "audio_tokenizer": AUDIO_TOKENIZER_MODEL_DIR,
+        "audio_tokenizer": "Spark-TTS-0.5B (BiCodec)",
         "models_loaded": tokenizer is not None and audio_tokenizer is not None
     }
 
@@ -413,7 +418,7 @@ if __name__ == "__main__":
     print(f"Device: {DEVICE}")
     print(f"vLLM endpoint: {VLLM_BASE_URL}")
     print(f"Fine-tuned LLM Model: {MODEL_NAME}")
-    print(f"Audio Tokenizer Directory: {AUDIO_TOKENIZER_MODEL_DIR}")
+    print(f"Audio Tokenizer Cache: Spark-TTS-0.5B")
     print("="*80)
     
     initialize_models()
