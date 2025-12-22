@@ -80,6 +80,22 @@ def initialize_models():
         
         print(f"Audio tokenizer model downloaded to: {audio_tokenizer_dir}")
         
+        # Verify BiCodec files exist
+        bicodec_path = Path(audio_tokenizer_dir) / "BiCodec"
+        bicodec_model = bicodec_path / "model.safetensors"
+        bicodec_config = bicodec_path / "config.yaml"
+        
+        if not bicodec_path.exists():
+            raise FileNotFoundError(f"BiCodec directory not found at {bicodec_path}")
+        if not bicodec_model.exists():
+            raise FileNotFoundError(f"BiCodec model weights not found at {bicodec_model}")
+        if not bicodec_config.exists():
+            raise FileNotFoundError(f"BiCodec config not found at {bicodec_config}")
+        
+        print(f"BiCodec files verified:")
+        print(f"  - Model: {bicodec_model}")
+        print(f"  - Config: {bicodec_config}")
+        
         # Initialize BiCodecTokenizer
         # BiCodecTokenizer expects the model directory path
         audio_tokenizer = BiCodecTokenizer(
@@ -87,16 +103,31 @@ def initialize_models():
             device=DEVICE
         )
         
-        print(f"BiCodec audio tokenizer loaded on {DEVICE}")
+        if audio_tokenizer is None:
+            raise RuntimeError("BiCodecTokenizer initialization returned None")
+        
+        print(f"✓ BiCodec audio tokenizer loaded successfully on {DEVICE}")
         
     except Exception as e:
-        print(f"Error loading BiCodec tokenizer: {e}")
+        print(f"ERROR: Failed to load BiCodec tokenizer: {e}")
         import traceback
         traceback.print_exc()
+        
+        # Print diagnostic info
+        print("\n" + "="*80)
+        print("DIAGNOSTIC INFORMATION")
+        print("="*80)
+        if 'audio_tokenizer_dir' in locals():
+            print(f"Download directory: {audio_tokenizer_dir}")
+            bicodec_dir = Path(audio_tokenizer_dir) / "BiCodec"
+            print(f"BiCodec directory exists: {bicodec_dir.exists()}")
+            if bicodec_dir.exists():
+                print(f"BiCodec contents: {list(bicodec_dir.iterdir())}")
+        print("="*80 + "\n")
+        
         raise RuntimeError(
             f"Could not load BiCodec tokenizer from {AUDIO_TOKENIZER_MODEL}. "
-            "Ensure the Spark-TTS repo is cloned and added to sys.path: "
-            "git clone https://github.com/SparkAudio/Spark-TTS && sys.path.append('Spark-TTS')"
+            "See error details above."
         )
     
     print("Models initialized successfully")
@@ -361,6 +392,11 @@ async def websocket_audio_stream(websocket: WebSocket):
     - Binary audio chunks (raw PCM)
     - JSON end message
     """
+    # Check if models are loaded before accepting connection
+    if tokenizer is None or audio_tokenizer is None:
+        await websocket.close(code=1011, reason="Models not initialized")
+        return
+    
     await websocket.accept()
     print("WebSocket connection established")
     
@@ -418,6 +454,14 @@ async def http_audio_stream(request: AudioRequest):
     
     Returns raw PCM audio stream with headers indicating format.
     """
+    # Check if models are loaded
+    if tokenizer is None or audio_tokenizer is None:
+        from fastapi import HTTPException
+        raise HTTPException(
+            status_code=503, 
+            detail="Models not initialized. Check server logs."
+        )
+    
     print(f"Received HTTP streaming request for: '{request.text[:50]}...'")
     
     async def stream_pcm():
@@ -501,4 +545,4 @@ if __name__ == "__main__":
     print(f"    --enable-prefix-caching")
     print("="*80 + "\n")
     
-    uvicorn.run("spark_tts_streaming:app", host="0.0.0.0", port=8000, reload=False)
+    uvicorn.run("spark_tts_streaming:app", host="0.0.0.0", port=8001, reload=False)
