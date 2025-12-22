@@ -501,4 +501,4 @@ if __name__ == "__main__":
     print(f"    --enable-prefix-caching")
     print("="*80 + "\n")
     
-    uvicorn.run("spark_tts_streaming:app", host="0.0.0.0", port=8001, reload=False)
+    uvicorn.run("spark_tts_streaming:app", host="0.0.0.0", port=8000, reload=False)
