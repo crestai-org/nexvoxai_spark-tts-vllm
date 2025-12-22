@@ -32,3 +32,9 @@ openai>=1.0.0  # Added - required for AsyncOpenAI client
 
 # Optional but recommended
 accelerate>=0.20.0  # For model loading optimization
+
+# Additional for Spark-TTS BiCodecTokenizer (from GitHub repo)
+einops==0.8.0                 # Required by Spark-TTS
+omegaconf==2.3.0              # Required by Spark-TTS
+soundfile==0.13.1             # For audio I/O (optional but useful)
+librosa==0.10.2.post1         # For audio processing (optional)
