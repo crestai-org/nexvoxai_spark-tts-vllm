@@ -38,3 +38,9 @@ einops==0.8.0                 # Required by Spark-TTS
 omegaconf==2.3.0              # Required by Spark-TTS
 soundfile==0.13.1             # For audio I/O (optional but useful)
 librosa==0.10.2.post1         # For audio processing (optional)
+
+
+
+soxr
+soundfile
+einx

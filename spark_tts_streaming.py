@@ -12,6 +12,7 @@ import uvicorn
 import json
 import re
 from typing import Optional, List
+from pathlib import Path
 
 # IMPORTANT: Add the Spark-TTS GitHub repo to sys.path for BiCodecTokenizer import
 import sys
@@ -61,13 +62,23 @@ def initialize_models():
     
     print(f"Loading BiCodec audio tokenizer from {MODEL_NAME}...")
     try:
-        # Load BiCodecTokenizer directly from the fine-tuned model repo (subfolder="BiCodec")
-        audio_tokenizer = BiCodecTokenizer.from_pretrained(
+        # Download model to local directory first
+        from huggingface_hub import snapshot_download
+        
+        model_dir = snapshot_download(
             MODEL_NAME,
-            subfolder="BiCodec",  # Official location for tokenizer code & weights
-            trust_remote_code=True
+            local_dir=f"./models/{MODEL_NAME.split('/')[-1]}",
+            local_dir_use_symlinks=False
         )
-        audio_tokenizer.to(DEVICE)
+        
+        print(f"Model downloaded to: {model_dir}")
+        
+        # Initialize BiCodecTokenizer with model directory path
+        # BiCodecTokenizer expects the model directory, not a HF repo name
+        audio_tokenizer = BiCodecTokenizer(
+            model_dir=Path(model_dir),
+            device=torch.device(DEVICE)
+        )
         
         if DEVICE == "cuda":
             audio_tokenizer = audio_tokenizer.half()  # FP16 for efficiency
