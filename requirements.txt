@@ -1,0 +1,34 @@
+# Core API dependencies
+fastapi==0.110.2
+uvicorn[standard]==0.29.0
+httptools==0.6.1
+orjson==3.10.3
+python-dotenv==1.0.1
+websockets==12.0  # Added for WebSocket support
+
+# Data processing
+pydantic==2.11.7
+tqdm==4.66.5
+setuptools==69.5.1
+
+# Audio processing
+numpy>=1.24.0  # Added - required for audio array processing
+snac==1.2.1
+
+# Model serving and transfer
+hf_transfer==0.1.9
+huggingface-hub>=0.20.0  # Added - required for hf_hub_download
+
+# VLLM and transformers
+vllm==0.7.3
+transformers==4.48.2  # Must be >=4.48.2 for vllm 0.7.3
+
+# PyTorch (required for BiCodec tokenizer)
+torch>=2.0.0
+torchaudio>=2.0.0
+
+# OpenAI client (for AsyncOpenAI)
+openai>=1.0.0  # Added - required for AsyncOpenAI client
+
+# Optional but recommended
+accelerate>=0.20.0  # For model loading optimization
