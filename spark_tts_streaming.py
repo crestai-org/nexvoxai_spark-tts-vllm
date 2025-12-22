@@ -60,7 +60,7 @@ def initialize_models():
     
     print("Downloading and initializing BiCodec audio tokenizer...")
     try:
-        model_base_repo = "unsloth/Spark-TTS-0.5B"
+        model_base_repo = "SparkAudio/Spark-TTS-0.5B"  # Official repo
         cache_dir = "Spark-TTS-0.5B"
 
         if not os.path.exists(cache_dir):
@@ -68,34 +68,28 @@ def initialize_models():
             snapshot_download(
                 repo_id=model_base_repo,
                 local_dir=cache_dir,
-                ignore_patterns=["*LLM*", "*model.safetensors*"],  # Skip LLM files
+                ignore_patterns=["LLM/*"],
                 local_dir_use_symlinks=False,
             )
             print(f"✅ Tokenizer files downloaded to {cache_dir}")
         else:
             print(f"Using existing tokenizer files at {cache_dir}")
 
-        # The BiCodec files are in the root or a subfolder - adjust if needed
-        # For unsloth/Spark-TTS-0.5B, wav2vec2 is in subfolder, but BiCodec may be root
-        bicodec_path = Path(cache_dir)
-        bicodec_model = bicodec_path / "model.safetensors"  # If in root
-        bicodec_config = bicodec_path / "config.yaml"
-
-        # Fallback if BiCodec is in a subfolder (check logs to see where files are)
-        if not bicodec_model.exists():
-            bicodec_path = Path(cache_dir) / "BiCodec"
-            bicodec_model = bicodec_path / "model.safetensors"
-            bicodec_config = bicodec_path / "config.yaml"
-            if not bicodec_model.exists():
-                raise FileNotFoundError(f"BiCodec model weights not found at {bicodec_model} or {cache_dir}/model.safetensors")
-
+        bicodec_model_path = Path(cache_dir) / "BiCodec" / "model.safetensors"
+        bicodec_config_path = Path(cache_dir) / "BiCodec" / "config.yaml"
+        
+        if not bicodec_model_path.exists():
+            raise FileNotFoundError(f"BiCodec model weights not found at {bicodec_model_path}")
+        if not bicodec_config_path.exists():
+            raise FileNotFoundError(f"BiCodec config not found at {bicodec_config_path}")
+        
         print(f"BiCodec files verified:")
-        print(f"  - Model: {bicodec_model}")
-        print(f"  - Config: {bicodec_config}")
+        print(f"  - Model: {bicodec_model_path}")
+        print(f"  - Config: {bicodec_config_path}")
 
         print("Initializing audio tokenizer...")
         audio_tokenizer = BiCodecTokenizer(
-            model_dir=str(cache_dir),  # Use the root download dir
+            model_dir=cache_dir,
             device=DEVICE
         )
         
@@ -104,14 +98,10 @@ def initialize_models():
     except Exception as e:
         print(f"ERROR: Failed to load BiCodec tokenizer: {e}")
         traceback.print_exc()
-        raise RuntimeError(
-            f"Could not load BiCodec tokenizer from {model_base_repo}. "
-            "Check if BiCodec files are in the downloaded folder - if not, contact Spark-TTS authors for weights."
-        )
+        raise RuntimeError(f"Could not load BiCodec tokenizer from {model_base_repo}.")
     
     print("Models initialized successfully")
-    print(f"Architecture: vLLM serves fine-tuned LLM ({MODEL_NAME}), "
-          f"local BiCodec decodes audio ({cache_dir})")
+    print(f"Architecture: vLLM serves fine-tuned LLM ({MODEL_NAME}), local BiCodec decodes audio")
 
 class AudioRequest(BaseModel):
     text: str
