@@ -16,16 +16,15 @@ from pathlib import Path
 import traceback
 from huggingface_hub import snapshot_download
 
-# IMPORTANT: Add the Spark-TTS GitHub repo to sys.path for BiCodecTokenizer import
 import sys
 sys.path.append("Spark-TTS")  # Clone from: git clone https://github.com/SparkAudio/Spark-TTS
 
-from sparktts.models.audio_tokenizer import BiCodecTokenizer  # Import from cloned repo
+from sparktts.models.audio_tokenizer import BiCodecTokenizer
 
 # Configuration
 CUDA_VISIBLE_DEVICES = os.environ.get("CUDA_VISIBLE_DEVICES", "0")
 VLLM_BASE_URL = os.environ.get("VLLM_BASE_URL", "http://0.0.0.0:8002/v1")
-MODEL_NAME = os.environ.get("MODEL_NAME", "crestai/spark-tts-nexvox")  # Fine-tuned LLM model
+MODEL_NAME = os.environ.get("MODEL_NAME", "crestai/spark-tts-nexvox")
 VLLM_API_KEY = os.environ.get("VLLM_API_KEY", "token123")
 
 os.environ["CUDA_VISIBLE_DEVICES"] = CUDA_VISIBLE_DEVICES
@@ -36,16 +35,15 @@ DEFAULT_TOP_K = 50
 DEFAULT_MAX_NEW_TOKENS = 2048
 DEFAULT_REPETITION_PENALTY = 1.0
 
-AUDIO_SAMPLERATE = 16000  # BiCodec default sample rate
+AUDIO_SAMPLERATE = 16000
 AUDIO_CHANNELS = 1
 
-STREAM_CHUNK_SIZE_TOKENS = 50  # Process audio every 50 semantic tokens
-INITIAL_CHUNK_SIZE_TOKENS = 20  # Smaller initial chunk for faster first audio
+STREAM_CHUNK_SIZE_TOKENS = 50
+INITIAL_CHUNK_SIZE_TOKENS = 20
 
 app = FastAPI()
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-# Initialize clients
 client = AsyncOpenAI(base_url=VLLM_BASE_URL, api_key=VLLM_API_KEY)
 tokenizer = None
 audio_tokenizer = None
@@ -63,39 +61,41 @@ def initialize_models():
     print("Downloading and initializing BiCodec audio tokenizer...")
     try:
         model_base_repo = "unsloth/Spark-TTS-0.5B"
-        cache_dir = "Spark-TTS-0.5B"  # Local cache folder
+        cache_dir = "Spark-TTS-0.5B"
 
-        # Download only the tokenizer files (BiCodec + wav2vec2), skip LLM
         if not os.path.exists(cache_dir):
             print(f"Downloading tokenizer files from {model_base_repo}...")
             snapshot_download(
                 repo_id=model_base_repo,
                 local_dir=cache_dir,
-                ignore_patterns=["*LLM*", "*model.safetensors*"],  # Skip LLM files and any extra safetensors
+                ignore_patterns=["*LLM*", "*model.safetensors*"],  # Skip LLM files
                 local_dir_use_symlinks=False,
             )
             print(f"✅ Tokenizer files downloaded to {cache_dir}")
         else:
             print(f"Using existing tokenizer files at {cache_dir}")
 
-        # Verify key files
-        bicodec_path = Path(cache_dir) / "BiCodec"
-        bicodec_model = bicodec_path / "model.safetensors"
+        # The BiCodec files are in the root or a subfolder - adjust if needed
+        # For unsloth/Spark-TTS-0.5B, wav2vec2 is in subfolder, but BiCodec may be root
+        bicodec_path = Path(cache_dir)
+        bicodec_model = bicodec_path / "model.safetensors"  # If in root
         bicodec_config = bicodec_path / "config.yaml"
-        
+
+        # Fallback if BiCodec is in a subfolder (check logs to see where files are)
         if not bicodec_model.exists():
-            raise FileNotFoundError(f"BiCodec model weights not found at {bicodec_model}")
-        if not bicodec_config.exists():
-            raise FileNotFoundError(f"BiCodec config not found at {bicodec_config}")
-        
+            bicodec_path = Path(cache_dir) / "BiCodec"
+            bicodec_model = bicodec_path / "model.safetensors"
+            bicodec_config = bicodec_path / "config.yaml"
+            if not bicodec_model.exists():
+                raise FileNotFoundError(f"BiCodec model weights not found at {bicodec_model} or {cache_dir}/model.safetensors")
+
         print(f"BiCodec files verified:")
         print(f"  - Model: {bicodec_model}")
         print(f"  - Config: {bicodec_config}")
 
-        # Initialize the audio tokenizer
         print("Initializing audio tokenizer...")
         audio_tokenizer = BiCodecTokenizer(
-            model_dir=cache_dir,
+            model_dir=str(cache_dir),  # Use the root download dir
             device=DEVICE
         )
         
@@ -106,7 +106,7 @@ def initialize_models():
         traceback.print_exc()
         raise RuntimeError(
             f"Could not load BiCodec tokenizer from {model_base_repo}. "
-            "See error details above."
+            "Check if BiCodec files are in the downloaded folder - if not, contact Spark-TTS authors for weights."
         )
     
     print("Models initialized successfully")
@@ -115,7 +115,7 @@ def initialize_models():
 
 class AudioRequest(BaseModel):
     text: str
-    voice: Optional[str] = None  # e.g., "248" for Luganda female
+    voice: Optional[str] = None
     temperature: float = DEFAULT_TEMPERATURE
     top_p: float = DEFAULT_TOP_P
     top_k: int = DEFAULT_TOP_K
@@ -161,8 +161,8 @@ def decode_audio_chunk(
     
     with torch.no_grad():
         wav_np = audio_tokenizer.detokenize(
-            pred_global_ids.squeeze(0),  # (N_global,)
-            pred_semantic_ids            # (1, N_semantic)
+            pred_global_ids.squeeze(0),
+            pred_semantic_ids
         )
     
     return wav_np
@@ -264,7 +264,6 @@ async def generate_audio_chunks(
                         
                         processed_semantic_count = end_idx
         
-        # Process remaining tokens after stream ends
         semantic_tokens, global_tokens = await loop.run_in_executor(
             None, extract_tokens_from_text, accumulated_text
         )
@@ -427,13 +426,7 @@ if __name__ == "__main__":
     print("Starting FastAPI server with WebSocket support...")
     print("="*80)
     print("IMPORTANT: Ensure vLLM server is running first:")
-    print(f"  vllm serve {MODEL_NAME} \\")
-    print(f"    --port 8002 \\")
-    print(f"    --max-model-len 8192 \\")
-    print(f"    --gpu-memory-utilization 0.85 \\")
-    print(f"    --quantization fp8 \\")
-    print(f"    --enable-chunked-prefill \\")
-    print(f"    --enable-prefix-caching")
+    print(f"  vllm serve {MODEL_NAME} --port 8002 --max-model-len 8192 --gpu-memory-utilization 0.85 --quantization fp8 --enable-chunked-prefill --enable-prefix-caching")
     print("="*80 + "\n")
     
     uvicorn.run("spark_tts_streaming:app", host="0.0.0.0", port=8000, reload=False)
