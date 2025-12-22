@@ -63,13 +63,18 @@ def initialize_models():
     
     print(f"Loading BiCodec audio tokenizer from {AUDIO_TOKENIZER_MODEL}...")
     try:
-        # Download audio tokenizer model (ignore LLM files, we only need BiCodec)
+        # Download audio tokenizer model (only BiCodec and wav2vec2, skip LLM)
         from huggingface_hub import snapshot_download
         
         audio_tokenizer_dir = snapshot_download(
             AUDIO_TOKENIZER_MODEL,
             local_dir=f"./models/{AUDIO_TOKENIZER_MODEL.split('/')[-1]}",
-            ignore_patterns=["*LLM*", "*.safetensors"],  # Skip large LLM files
+            allow_patterns=[
+                "BiCodec/*",
+                "wav2vec2-large-xlsr-53/*",
+                "config.yaml",
+                "*.json"
+            ],
             local_dir_use_symlinks=False
         )
         
