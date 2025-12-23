@@ -31,7 +31,7 @@ AUDIO_CHANNELS = 1
 # Default parameters
 DEFAULT_TEMPERATURE = 0.7
 DEFAULT_MAX_TOKENS = 2048
-DEFAULT_SPEAKER_ID = 248  # Luganda female
+DEFAULT_SPEAKER_ID = 243  # Runyankore female
 
 # Speaker IDs mapping
 SPEAKER_IDS = {
@@ -75,7 +75,7 @@ device = None
 
 class AudioRequest(BaseModel):
     text: str
-    voice: str = "luganda_female"
+    voice: str = "runyankore_female"
     speaker_id: Optional[int] = None
     temperature: float = DEFAULT_TEMPERATURE
     max_tokens: int = DEFAULT_MAX_TOKENS
