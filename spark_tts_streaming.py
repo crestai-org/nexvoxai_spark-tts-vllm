@@ -1,292 +1,234 @@
 import os
+import sys
 import torch
-from openai import AsyncOpenAI
-from transformers import AutoTokenizer
-import asyncio
-import functools
 import numpy as np
+import re
+import json
+import asyncio
+from typing import List, Optional
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import uvicorn
-import json
-import re
-from typing import Optional, List
-from pathlib import Path
-import traceback
+from vllm import LLM
+from vllm.sampling_params import SamplingParams
 from huggingface_hub import snapshot_download
-
-import sys
-sys.path.append("Spark-TTS")  # Clone from: git clone https://github.com/SparkAudio/Spark-TTS
-
-from sparktts.models.audio_tokenizer import BiCodecTokenizer
 
 # Configuration
 CUDA_VISIBLE_DEVICES = os.environ.get("CUDA_VISIBLE_DEVICES", "0")
-VLLM_BASE_URL = os.environ.get("VLLM_BASE_URL", "http://0.0.0.0:8002/v1")
 MODEL_NAME = os.environ.get("MODEL_NAME", "crestai/spark-tts-nexvox")
-VLLM_API_KEY = os.environ.get("VLLM_API_KEY", "token123")
+TOKENIZER_REPO = os.environ.get("TOKENIZER_REPO", "unsloth/Spark-TTS-0.5B")
+TOKENIZER_CACHE_DIR = os.environ.get("TOKENIZER_CACHE_DIR", "Spark-TTS-0.5B")
+SPARK_TTS_REPO_PATH = os.environ.get("SPARK_TTS_REPO_PATH", "Spark-TTS")
 
 os.environ["CUDA_VISIBLE_DEVICES"] = CUDA_VISIBLE_DEVICES
 
-DEFAULT_TEMPERATURE = 0.8
-DEFAULT_TOP_P = 1.0
-DEFAULT_TOP_K = 50
-DEFAULT_MAX_NEW_TOKENS = 2048
-DEFAULT_REPETITION_PENALTY = 1.0
-
+# Audio configuration
 AUDIO_SAMPLERATE = 16000
+AUDIO_BITS_PER_SAMPLE = 16
 AUDIO_CHANNELS = 1
 
-STREAM_CHUNK_SIZE_TOKENS = 50
-INITIAL_CHUNK_SIZE_TOKENS = 20
+# Default parameters
+DEFAULT_TEMPERATURE = 0.7
+DEFAULT_MAX_TOKENS = 2048
+DEFAULT_SPEAKER_ID = 248  # Luganda female
+
+# Speaker IDs mapping
+SPEAKER_IDS = {
+    "acholi_female": 241,
+    "ateso_female": 242,
+    "runyankore_female": 243,
+    "lugbara_female": 245,
+    "swahili_male": 246,
+    "luganda_female": 248,
+}
+
+# Precomputed global tokens for each speaker
+GLOBAL_IDS_BY_SPEAKER = {
+    241: [1755, 1265, 184, 3545, 2718, 2405, 3237, 1360, 3621, 1850, 37, 3382, 736,
+          3380, 3131, 2036, 244, 2128, 254, 2550, 3181, 764, 1277, 502, 2941, 1993,
+          3556, 1428, 3505, 3245, 3506, 1540],
+    242: [1367, 1522, 308, 4061, 1449, 2468, 2193, 1349, 3458, 2339, 1651, 3174,
+          501, 3364, 3194, 2041, 442, 1061, 502, 2234, 2397, 358, 3829, 2490, 2031,
+          1002, 3548, 586, 3445, 1419, 4093, 2908],
+    243: [2051, 242, 2684, 4062, 2654, 2252, 353, 3657, 2759, 3254, 1649, 3366,
+          1017, 3600, 3131, 3813, 1535, 1595, 1059, 237, 2158, 1174, 4085, 2174,
+          3791, 990, 3274, 2693, 3829, 2271, 2650, 1689],
+    245: [2031, 2545, 116, 4060, 746, 1385, 3301, 1312, 3638, 1846, 85, 3190, 1016,
+          3384, 3134, 954, 244, 1104, 235, 2549, 3357, 508, 1278, 1974, 2621, 1896,
+          3812, 2185, 3061, 2941, 1187, 5],
+    246: [1811, 1138, 2873, 3309, 2639, 723, 3363, 974, 1612, 2531, 1769, 3376,
+          933, 3848, 3195, 2180, 2359, 1275, 3493, 3260, 2279, 3715, 3508, 2433,
+          4082, 1087, 3545, 1449, 160, 3531, 2908, 2094],
+    248: [2559, 1523, 440, 3789, 1438, 373, 2212, 1248, 3369, 1847, 36, 3126, 480,
+          3380, 3133, 2041, 248, 2384, 730, 2554, 3182, 1785, 1277, 1013, 2425,
+          1932, 3560, 1177, 2736, 2430, 2722, 261]
+}
 
 app = FastAPI()
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-client = AsyncOpenAI(base_url=VLLM_BASE_URL, api_key=VLLM_API_KEY)
-tokenizer = None
+# Global model variables
+vllm_model = None
 audio_tokenizer = None
+device = None
 
-print(f"Connecting to vLLM at {VLLM_BASE_URL}")
-
-def initialize_models():
-    """Initialize text tokenizer and BiCodec audio tokenizer."""
-    global tokenizer, audio_tokenizer
-    
-    print(f"Loading text tokenizer from {MODEL_NAME}")
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
-    print("Text tokenizer loaded")
-    
-    print("Downloading and initializing BiCodec audio tokenizer...")
-    try:
-        model_base_repo = "SparkAudio/Spark-TTS-0.5B"  # Official repo
-        cache_dir = "Spark-TTS-0.5B"
-
-        if not os.path.exists(cache_dir):
-            print(f"Downloading tokenizer files from {model_base_repo}...")
-            snapshot_download(
-                repo_id=model_base_repo,
-                local_dir=cache_dir,
-                ignore_patterns=["LLM/*"],
-                local_dir_use_symlinks=False,
-            )
-            print(f"✅ Tokenizer files downloaded to {cache_dir}")
-        else:
-            print(f"Using existing tokenizer files at {cache_dir}")
-
-        bicodec_model_path = Path(cache_dir) / "BiCodec" / "model.safetensors"
-        bicodec_config_path = Path(cache_dir) / "BiCodec" / "config.yaml"
-        
-        if not bicodec_model_path.exists():
-            raise FileNotFoundError(f"BiCodec model weights not found at {bicodec_model_path}")
-        if not bicodec_config_path.exists():
-            raise FileNotFoundError(f"BiCodec config not found at {bicodec_config_path}")
-        
-        print(f"BiCodec files verified:")
-        print(f"  - Model: {bicodec_model_path}")
-        print(f"  - Config: {bicodec_config_path}")
-
-        print("Initializing audio tokenizer...")
-        audio_tokenizer = BiCodecTokenizer(
-            model_dir=cache_dir,
-            device=DEVICE
-        )
-        
-        print(f"✅ Audio tokenizer initialized on {DEVICE}")
-        
-    except Exception as e:
-        print(f"ERROR: Failed to load BiCodec tokenizer: {e}")
-        traceback.print_exc()
-        raise RuntimeError(f"Could not load BiCodec tokenizer from {model_base_repo}.")
-    
-    print("Models initialized successfully")
-    print(f"Architecture: vLLM serves fine-tuned LLM ({MODEL_NAME}), local BiCodec decodes audio")
 
 class AudioRequest(BaseModel):
     text: str
-    voice: Optional[str] = None
+    voice: str = "luganda_female"
+    speaker_id: Optional[int] = None
     temperature: float = DEFAULT_TEMPERATURE
-    top_p: float = DEFAULT_TOP_P
-    top_k: int = DEFAULT_TOP_K
-    max_new_tokens: int = DEFAULT_MAX_NEW_TOKENS
-    repetition_penalty: float = DEFAULT_REPETITION_PENALTY
+    max_tokens: int = DEFAULT_MAX_TOKENS
 
-def format_prompt_for_spark(text: str, voice: Optional[str] = None) -> str:
-    if voice:
-        text = f"{voice}: {text}"
-    
-    prompt = "".join([
-        "<|task_tts|>",
-        "<|start_content|>",
-        text,
-        "<|end_content|>",
-        "<|start_global_token|>"
-    ])
-    
-    return prompt
 
-def extract_tokens_from_text(text: str) -> tuple[List[int], List[int]]:
-    semantic_matches = re.findall(r"<\|bicodec_semantic_(\d+)\|>", text)
-    semantic_tokens = [int(token) for token in semantic_matches] if semantic_matches else []
-    
-    global_matches = re.findall(r"<\|bicodec_global_(\d+)\|>", text)
-    global_tokens = [int(token) for token in global_matches] if global_matches else []
-    
-    return semantic_tokens, global_tokens
+def chunk_text_simple(text: str) -> List[str]:
+    """Split text into individual sentences."""
+    sentences = re.split(r'(?<=[.!?])\s+', text.strip())
+    return [s.strip() for s in sentences if s.strip()]
 
-def decode_audio_chunk(
-    semantic_tokens: List[int],
-    global_tokens: List[int]
-) -> np.ndarray:
-    if not semantic_tokens:
-        return np.array([], dtype=np.float32)
+
+def initialize_models():
+    """Initialize vLLM model and audio tokenizer."""
+    global vllm_model, audio_tokenizer, device
     
-    pred_semantic_ids = torch.tensor(semantic_tokens).long().unsqueeze(0).to(DEVICE)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
     
-    if not global_tokens:
-        pred_global_ids = torch.zeros((1, 1), dtype=torch.long).to(DEVICE)
+    # Add Spark-TTS to path if exists
+    if os.path.exists(SPARK_TTS_REPO_PATH):
+        sys.path.append(SPARK_TTS_REPO_PATH)
+        print(f"Added {SPARK_TTS_REPO_PATH} to Python path")
     else:
-        pred_global_ids = torch.tensor(global_tokens).long().unsqueeze(0).unsqueeze(0).to(DEVICE)
+        print(f"Warning: {SPARK_TTS_REPO_PATH} not found. Clone it with:")
+        print(f"git clone https://github.com/SparkAudio/Spark-TTS")
     
-    with torch.no_grad():
-        wav_np = audio_tokenizer.detokenize(
-            pred_global_ids.squeeze(0),
-            pred_semantic_ids
+    # Load vLLM model
+    print(f"Loading Spark TTS model: {MODEL_NAME}...")
+    vllm_model = LLM(
+        MODEL_NAME,
+        enforce_eager=False,
+        gpu_memory_utilization=0.85
+    )
+    print("✅ Model loaded successfully!")
+    
+    # Download tokenizer if needed
+    if not os.path.exists(TOKENIZER_CACHE_DIR):
+        print(f"Downloading tokenizer from {TOKENIZER_REPO}...")
+        snapshot_download(
+            repo_id=TOKENIZER_REPO,
+            local_dir=TOKENIZER_CACHE_DIR,
+            ignore_patterns=["*LLM*"],
         )
+        print(f"✅ Tokenizer downloaded to {TOKENIZER_CACHE_DIR}")
+    
+    # Initialize audio tokenizer
+    try:
+        from sparktts.models.audio_tokenizer import BiCodecTokenizer
+        print("Initializing audio tokenizer...")
+        audio_tokenizer = BiCodecTokenizer(TOKENIZER_CACHE_DIR, device)
+        print("✅ Audio tokenizer initialized!")
+    except ImportError:
+        print("Error: Could not import BiCodecTokenizer. Make sure Spark-TTS repo is available.")
+        raise
+
+
+def generate_audio_segment(text: str, speaker_id: int, temperature: float) -> np.ndarray:
+    """Generate audio for a single text segment."""
+    global_tokens = GLOBAL_IDS_BY_SPEAKER[speaker_id]
+    
+    # Create prompt
+    prompt = f"<|task_tts|><|start_content|>{speaker_id}: {text}<|end_content|><|start_global_token|>"
+    prompt += ''.join([f'<|bicodec_global_{t}|>' for t in global_tokens])
+    prompt += '<|end_global_token|><|start_semantic_token|>'
+    
+    # Generate with vLLM
+    sampling_params = SamplingParams(temperature=temperature, max_tokens=DEFAULT_MAX_TOKENS)
+    outputs = vllm_model.generate(prompts=[prompt], sampling_params=sampling_params)
+    
+    # Extract semantic tokens
+    predicted_tokens = outputs[0].outputs[0].text
+    semantic_matches = re.findall(r"<\|bicodec_semantic_(\d+)\|>", predicted_tokens)
+    
+    if not semantic_matches:
+        raise ValueError("No semantic tokens found in the generated output.")
+    
+    # Convert to tensors
+    pred_semantic_ids = (
+        torch.tensor([int(token) for token in semantic_matches]).long().unsqueeze(0)
+    )
+    pred_global_ids = torch.tensor([global_tokens]).long()
+    
+    # Decode to audio
+    wav_np = audio_tokenizer.detokenize(
+        pred_global_ids.to(device), pred_semantic_ids.to(device)
+    )
     
     return wav_np
 
-def apply_fade(audio_array: np.ndarray, fade_samples: int) -> np.ndarray:
-    if audio_array.size < 2 * fade_samples:
-        return audio_array
-    
-    fade_in = np.linspace(0., 1., fade_samples)
-    fade_out = np.linspace(1., 0., fade_samples)
-    
-    audio_array[:fade_samples] *= fade_in
-    audio_array[-fade_samples:] *= fade_out
-    
-    return audio_array
 
-def convert_to_pcm16_bytes(audio_array: np.ndarray, fade_ms: int = 5) -> bytes:
-    if audio_array.size == 0:
-        return b''
-    
-    if fade_ms > 0:
-        fade_samples = int(AUDIO_SAMPLERATE * fade_ms / 1000)
-        fade_samples = (fade_samples // 2) * 2
-        if fade_samples > 0:
-            audio_array = apply_fade(audio_array.copy(), fade_samples)
-    
-    audio_int16 = (audio_array * 32767).clip(-32768, 32767).astype(np.int16)
+def convert_to_pcm16_bytes(audio_np: np.ndarray) -> bytes:
+    """Convert numpy audio array to PCM16 bytes."""
+    audio_int16 = (audio_np * 32767).astype(np.int16)
     return audio_int16.tobytes()
 
-async def generate_audio_chunks(
+
+async def generate_audio_chunks_async(
     text: str,
-    voice: Optional[str],
-    temperature: float,
-    top_p: float,
-    top_k: int,
-    max_new_tokens: int,
-    repetition_penalty: float
+    speaker_id: int,
+    temperature: float
 ):
+    """Async generator that yields audio chunks for streaming."""
     loop = asyncio.get_running_loop()
     
     try:
-        formatted_prompt = format_prompt_for_spark(text, voice)
-        print(f"Formatted Prompt: {formatted_prompt[:100]}...")
+        # Split text into sentences
+        sentences = chunk_text_simple(text)
         
-        stream_kwargs = dict(
-            model=MODEL_NAME,
-            prompt=formatted_prompt,
-            max_tokens=max_new_tokens,
-            temperature=temperature,
-            top_p=top_p,
-            stream=True,
-            extra_body={
-                'repetition_penalty': repetition_penalty,
-                'top_k': top_k
-            },
-        )
-        
-        response_stream = await client.completions.create(**stream_kwargs)
-        
-        accumulated_text = ""
-        processed_semantic_count = 0
-        all_global_tokens = []
-        first_chunk_yielded = False
-        
-        async for chunk in response_stream:
-            if chunk.choices:
-                chunk_text = chunk.choices[0].text or ""
-                accumulated_text += chunk_text
+        for i, sentence in enumerate(sentences):
+            if not sentence.strip():
+                continue
+            
+            print(f"Generating audio for sentence {i+1}/{len(sentences)}: {sentence[:50]}...")
+            
+            # Generate audio in thread pool to avoid blocking
+            audio_np = await loop.run_in_executor(
+                None,
+                generate_audio_segment,
+                sentence,
+                speaker_id,
+                temperature
+            )
+            
+            # Convert to PCM bytes
+            pcm_bytes = convert_to_pcm16_bytes(audio_np)
+            
+            if pcm_bytes:
+                yield pcm_bytes
                 
-                semantic_tokens, global_tokens = await loop.run_in_executor(
-                    None, extract_tokens_from_text, accumulated_text
-                )
-                
-                if global_tokens:
-                    all_global_tokens = global_tokens
-                
-                current_semantic_count = len(semantic_tokens)
-                
-                chunk_size = INITIAL_CHUNK_SIZE_TOKENS if not first_chunk_yielded else STREAM_CHUNK_SIZE_TOKENS
-                
-                if current_semantic_count >= processed_semantic_count + chunk_size:
-                    tokens_to_process = (current_semantic_count - processed_semantic_count) // chunk_size * chunk_size
-                    end_idx = processed_semantic_count + tokens_to_process
-                    
-                    if end_idx > processed_semantic_count:
-                        semantic_chunk = semantic_tokens[processed_semantic_count:end_idx]
-                        
-                        audio_array = await loop.run_in_executor(
-                            None,
-                            decode_audio_chunk,
-                            semantic_chunk,
-                            all_global_tokens
-                        )
-                        
-                        pcm_bytes = convert_to_pcm16_bytes(audio_array, fade_ms=50)
-                        if pcm_bytes:
-                            yield pcm_bytes
-                            first_chunk_yielded = True
-                        
-                        processed_semantic_count = end_idx
-        
-        semantic_tokens, global_tokens = await loop.run_in_executor(
-            None, extract_tokens_from_text, accumulated_text
-        )
-        
-        if global_tokens:
-            all_global_tokens = global_tokens
-        
-        if len(semantic_tokens) > processed_semantic_count:
-            remaining_tokens = semantic_tokens[processed_semantic_count:]
-            if remaining_tokens:
-                audio_array = await loop.run_in_executor(
-                    None,
-                    decode_audio_chunk,
-                    remaining_tokens,
-                    all_global_tokens
-                )
-                
-                pcm_bytes = convert_to_pcm16_bytes(audio_array, fade_ms=50)
-                if pcm_bytes:
-                    yield pcm_bytes
-        
-        print(f"Generated {len(semantic_tokens)} semantic tokens, {len(all_global_tokens)} global tokens")
-        
     except Exception as e:
         print(f"Error during audio generation: {e}")
+        import traceback
         traceback.print_exc()
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize models on startup."""
+    print("Initializing Spark TTS models...")
+    initialize_models()
+    print("Server ready!")
+
 
 @app.websocket("/v1/audio/speech/stream/ws")
 async def websocket_audio_stream(websocket: WebSocket):
-    if tokenizer is None or audio_tokenizer is None:
-        await websocket.close(code=1011, reason="Models not initialized")
-        return
+    """
+    WebSocket endpoint for streaming audio generation.
     
+    Protocol:
+    - Client sends JSON: {"input": "text", "voice": "voice_name", "speaker_id": 248, "continue": true/false, "segment_id": "id"}
+    - Server sends: {"type": "start", "segment_id": "id"} followed by binary audio chunks
+    - Server sends: {"type": "end", "segment_id": "id"} when segment complete
+    """
     await websocket.accept()
     print("WebSocket connection established")
     
@@ -297,29 +239,41 @@ async def websocket_audio_stream(websocket: WebSocket):
                 message = json.loads(data)
                 
                 text = message.get("input", "")
-                voice = message.get("voice")
+                voice = message.get("voice", "luganda_female")
+                speaker_id = message.get("speaker_id")
+                temperature = message.get("temperature", DEFAULT_TEMPERATURE)
                 continue_stream = message.get("continue", True)
                 segment_id = message.get("segment_id", "default")
+                
+                # Resolve speaker ID
+                if speaker_id is None:
+                    speaker_id = SPEAKER_IDS.get(voice, DEFAULT_SPEAKER_ID)
                 
                 if not text and not continue_stream:
                     print("Received end signal, closing stream")
                     break
                 
                 if text:
-                    await websocket.send_json({"type": "start", "segment_id": segment_id})
+                    # Send start message
+                    await websocket.send_json({
+                        "type": "start",
+                        "segment_id": segment_id,
+                        "speaker_id": speaker_id
+                    })
                     
-                    async for audio_chunk in generate_audio_chunks(
+                    # Stream audio chunks
+                    async for audio_chunk in generate_audio_chunks_async(
                         text=text,
-                        voice=voice,
-                        temperature=DEFAULT_TEMPERATURE,
-                        top_p=DEFAULT_TOP_P,
-                        top_k=DEFAULT_TOP_K,
-                        max_new_tokens=DEFAULT_MAX_NEW_TOKENS,
-                        repetition_penalty=DEFAULT_REPETITION_PENALTY
+                        speaker_id=speaker_id,
+                        temperature=temperature
                     ):
                         await websocket.send_bytes(audio_chunk)
                     
-                    await websocket.send_json({"type": "end", "segment_id": segment_id})
+                    # Send end message
+                    await websocket.send_json({
+                        "type": "end",
+                        "segment_id": segment_id
+                    })
                     
             except WebSocketDisconnect:
                 print("Client disconnected")
@@ -336,26 +290,24 @@ async def websocket_audio_stream(websocket: WebSocket):
     finally:
         print("WebSocket connection closed")
 
+
 @app.post("/v1/audio/speech/stream")
 async def http_audio_stream(request: AudioRequest):
-    if tokenizer is None or audio_tokenizer is None:
-        from fastapi import HTTPException
-        raise HTTPException(
-            status_code=503, 
-            detail="Models not initialized. Check server logs."
-        )
-    
+    """
+    HTTP endpoint for streaming audio as raw PCM bytes.
+    """
     print(f"Received HTTP streaming request for: '{request.text[:50]}...'")
     
+    # Resolve speaker ID
+    speaker_id = request.speaker_id
+    if speaker_id is None:
+        speaker_id = SPEAKER_IDS.get(request.voice, DEFAULT_SPEAKER_ID)
+    
     async def stream_pcm():
-        async for chunk in generate_audio_chunks(
+        async for chunk in generate_audio_chunks_async(
             text=request.text,
-            voice=request.voice,
-            temperature=request.temperature,
-            top_p=request.top_p,
-            top_k=request.top_k,
-            max_new_tokens=request.max_new_tokens,
-            repetition_penalty=request.repetition_penalty
+            speaker_id=speaker_id,
+            temperature=request.temperature
         ):
             yield chunk
     
@@ -364,59 +316,63 @@ async def http_audio_stream(request: AudioRequest):
         media_type="audio/pcm",
         headers={
             "X-Sample-Rate": str(AUDIO_SAMPLERATE),
-            "X-Bit-Depth": "16",
-            "X-Channels": str(AUDIO_CHANNELS)
+            "X-Bit-Depth": str(AUDIO_BITS_PER_SAMPLE),
+            "X-Channels": str(AUDIO_CHANNELS),
         }
     )
 
+
 @app.get("/")
 async def read_root():
+    """Root endpoint with API information."""
     return {
-        "message": "Spark TTS Streaming API (Fine-tuned for East African Languages)",
-        "llm_model": MODEL_NAME,
-        "audio_tokenizer": "Spark-TTS-0.5B (BiCodec)",
+        "message": "Spark TTS Streaming API",
+        "model": MODEL_NAME,
         "sample_rate": AUDIO_SAMPLERATE,
-        "available_voices": {
-            "241": "Acholi (female)",
-            "242": "Ateso (female)",
-            "243": "Runyankore (female)",
-            "245": "Lugbara (female)",
-            "246": "Swahili (male)",
-            "248": "Luganda (female)"
-        },
+        "available_voices": list(SPEAKER_IDS.keys()),
         "endpoints": {
             "websocket": "/v1/audio/speech/stream/ws",
             "http": "/v1/audio/speech/stream"
+        },
+        "example_usage": {
+            "websocket": {
+                "connect": "ws://localhost:8001/v1/audio/speech/stream/ws",
+                "send": {
+                    "input": "Your text here",
+                    "voice": "luganda_female",
+                    "segment_id": "segment_1"
+                }
+            },
+            "http": {
+                "url": "POST /v1/audio/speech/stream",
+                "body": {
+                    "text": "Your text here",
+                    "voice": "luganda_female",
+                    "temperature": 0.7
+                }
+            }
         }
     }
 
-@app.get("/health")
-async def health_check():
+
+@app.get("/v1/voices")
+async def list_voices():
+    """List available voices."""
     return {
-        "status": "healthy" if tokenizer is not None and audio_tokenizer is not None else "initializing",
-        "device": DEVICE,
-        "llm_model": MODEL_NAME,
-        "audio_tokenizer": "Spark-TTS-0.5B (BiCodec)",
-        "models_loaded": tokenizer is not None and audio_tokenizer is not None
+        "voices": [
+            {"id": name, "speaker_id": sid, "language": name.split("_")[0]}
+            for name, sid in SPEAKER_IDS.items()
+        ]
     }
 
+
 if __name__ == "__main__":
-    print("="*80)
-    print("Initializing Spark TTS Streaming Server")
-    print("="*80)
-    print(f"Device: {DEVICE}")
-    print(f"vLLM endpoint: {VLLM_BASE_URL}")
-    print(f"Fine-tuned LLM Model: {MODEL_NAME}")
-    print(f"Audio Tokenizer Cache: Spark-TTS-0.5B")
-    print("="*80)
-    
-    initialize_models()
-    
-    print("\n" + "="*80)
-    print("Starting FastAPI server with WebSocket support...")
-    print("="*80)
-    print("IMPORTANT: Ensure vLLM server is running first:")
-    print(f"  vllm serve {MODEL_NAME} --port 8002 --max-model-len 8192 --gpu-memory-utilization 0.85 --quantization fp8 --enable-chunked-prefill --enable-prefix-caching")
-    print("="*80 + "\n")
-    
-    uvicorn.run("spark_tts_streaming:app", host="0.0.0.0", port=8000, reload=False)
+    print("Starting Spark TTS FastAPI server with WebSocket support...")
+    print(f"Model: {MODEL_NAME}")
+    print(f"Device: {CUDA_VISIBLE_DEVICES}")
+    uvicorn.run(
+        "spark_tts_streaming:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=False
+    )
