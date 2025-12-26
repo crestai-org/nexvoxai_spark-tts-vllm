@@ -554,7 +554,7 @@ if __name__ == "__main__":
     print(f"Model: {MODEL_NAME}")
     print(f"Device: {CUDA_VISIBLE_DEVICES}")
     uvicorn.run(
-        "spark_tts_streaming:app",
+        "spark:app",
         host="0.0.0.0",
         port=8000,
         reload=False
