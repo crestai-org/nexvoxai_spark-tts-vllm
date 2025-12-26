@@ -156,29 +156,68 @@ def extract_voice_embedding(audio_path: str) -> List[int]:
     """
     import torchaudio
     
-    # Load audio
-    waveform, sample_rate = torchaudio.load(audio_path)
-    
-    # Resample to 16kHz if needed
-    if sample_rate != AUDIO_SAMPLERATE:
-        resampler = torchaudio.transforms.Resample(sample_rate, AUDIO_SAMPLERATE)
-        waveform = resampler(waveform)
-    
-    # Convert to mono if stereo
-    if waveform.shape[0] > 1:
-        waveform = torch.mean(waveform, dim=0, keepdim=True)
-    
-    # Move to device and normalize
-    waveform = waveform.to(device)
-    
-    # Tokenize audio to extract global tokens
-    global_ids, semantic_ids = audio_tokenizer.tokenize(waveform)
-    
-    # Extract the 32 global tokens
-    global_tokens = global_ids[0].cpu().tolist()
-    
-    print(f"✅ Extracted {len(global_tokens)} global tokens from reference audio")
-    return global_tokens
+    try:
+        # Load audio
+        waveform, sample_rate = torchaudio.load(audio_path)
+        
+        # Resample to 16kHz if needed
+        if sample_rate != AUDIO_SAMPLERATE:
+            resampler = torchaudio.transforms.Resample(sample_rate, AUDIO_SAMPLERATE)
+            waveform = resampler(waveform)
+        
+        # Convert to mono if stereo
+        if waveform.shape[0] > 1:
+            waveform = torch.mean(waveform, dim=0, keepdim=True)
+        
+        # Ensure correct shape [1, length]
+        if waveform.dim() == 1:
+            waveform = waveform.unsqueeze(0)
+        
+        # Move to device
+        waveform = waveform.to(device)
+        
+        print(f"Processing audio: shape={waveform.shape}, sample_rate={sample_rate}")
+        
+        # Tokenize audio to extract global tokens
+        # The BiCodecTokenizer.encode method returns (global_ids, semantic_ids)
+        with torch.no_grad():
+            result = audio_tokenizer.encode(waveform)
+            
+            # Handle different return formats
+            if isinstance(result, tuple) and len(result) == 2:
+                global_ids, semantic_ids = result
+            elif isinstance(result, dict):
+                global_ids = result.get('global_ids') or result.get('global')
+                semantic_ids = result.get('semantic_ids') or result.get('semantic')
+            else:
+                raise ValueError(f"Unexpected tokenizer output format: {type(result)}")
+        
+        # Extract the 32 global tokens
+        if isinstance(global_ids, torch.Tensor):
+            if global_ids.dim() > 1:
+                global_tokens = global_ids[0].cpu().tolist()
+            else:
+                global_tokens = global_ids.cpu().tolist()
+        else:
+            global_tokens = global_ids
+        
+        # Ensure we have exactly 32 tokens
+        if len(global_tokens) != 32:
+            print(f"Warning: Expected 32 global tokens, got {len(global_tokens)}")
+            # Pad or truncate to 32
+            if len(global_tokens) < 32:
+                global_tokens = global_tokens + [0] * (32 - len(global_tokens))
+            else:
+                global_tokens = global_tokens[:32]
+        
+        print(f"✅ Extracted {len(global_tokens)} global tokens from reference audio")
+        return global_tokens
+        
+    except Exception as e:
+        print(f"Error in extract_voice_embedding: {e}")
+        import traceback
+        traceback.print_exc()
+        raise ValueError(f"Failed to extract voice embedding: {str(e)}")
 
 
 def save_base64_audio(base64_audio: str, prefix: str = "ref_audio") -> str:

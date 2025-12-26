@@ -12,3 +12,8 @@ export SPARK_TTS_REPO_PATH=Spark-TTS
 # Server configuration
 export HOST=0.0.0.0
 export PORT=8000
+
+
+pip install einx einops soundfile librosa vllm omegaconf fastapi uvicorn websockets torchcodec
+apt update
+apt install ffmpeg
