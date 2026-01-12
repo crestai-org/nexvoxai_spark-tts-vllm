@@ -1,0 +1,34 @@
+version: '3.8'
+
+services:
+  spark-tts:
+    build: .
+    container_name: spark-tts-streaming
+    ports:
+      - "8000:8000"
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+      - MODEL_NAME=crestai/spark-tts-nexvox-v2
+      - TOKENIZER_REPO=unsloth/Spark-TTS-0.5B
+      - TOKENIZER_CACHE_DIR=Spark-TTS-0.5B
+      - SPARK_TTS_REPO_PATH=Spark-TTS
+      - HUGGINGFACE_HUB_TOKEN=your_huggingface_token_here
+    volumes:
+      # Mount cache directory to persist model downloads
+      - ./cache:/app/cache
+      # Mount tokenizer cache to persist downloads
+      - ./Spark-TTS-0.5B:/app/Spark-TTS-0.5B
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s

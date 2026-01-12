@@ -1,19 +1,15 @@
-# GPU selection
-export CUDA_VISIBLE_DEVICES=0
-
-# Model configuration
-export MODEL_NAME=crestai/spark-tts-nexvox
-export TOKENIZER_REPO=unsloth/Spark-TTS-0.5B
-export TOKENIZER_CACHE_DIR=Spark-TTS-0.5B
-
-# Spark-TTS repository path
-export SPARK_TTS_REPO_PATH=Spark-TTS
-
-# Server configuration
-export HOST=0.0.0.0
-export PORT=8000
-
-
-pip install einx einops soundfile librosa vllm omegaconf fastapi uvicorn websockets torchcodec
-apt update
-apt install ffmpeg
+# Python dependencies for Spark TTS Streaming
+torch>=2.0.0
+numpy>=1.21.0
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+websockets>=12.0
+pydantic>=2.0.0
+vllm>=0.4.0
+huggingface-hub>=0.19.0
+einops>=0.7.0
+einx>=0.2.0
+soundfile>=0.12.0
+librosa>=0.10.0
+omegaconf>=2.3.0
+torchcodec>=0.2.0

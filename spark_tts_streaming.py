@@ -16,7 +16,7 @@ from huggingface_hub import snapshot_download
 
 # Configuration
 CUDA_VISIBLE_DEVICES = os.environ.get("CUDA_VISIBLE_DEVICES", "0")
-MODEL_NAME = os.environ.get("MODEL_NAME", "crestai/spark-tts-nexvox")
+MODEL_NAME = os.environ.get("MODEL_NAME", "crestai/spark-tts-nexvox-v2")
 TOKENIZER_REPO = os.environ.get("TOKENIZER_REPO", "unsloth/Spark-TTS-0.5B")
 TOKENIZER_CACHE_DIR = os.environ.get("TOKENIZER_CACHE_DIR", "Spark-TTS-0.5B")
 SPARK_TTS_REPO_PATH = os.environ.get("SPARK_TTS_REPO_PATH", "Spark-TTS")
