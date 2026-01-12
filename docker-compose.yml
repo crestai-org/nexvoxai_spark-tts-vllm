@@ -14,17 +14,17 @@ services:
       - SPARK_TTS_REPO_PATH=Spark-TTS
       - HUGGINGFACE_HUB_TOKEN=your_huggingface_token_here
     volumes:
-      # Mount cache directory to persist model downloads
       - ./cache:/app/cache
-      # Mount tokenizer cache to persist downloads
       - ./Spark-TTS-0.5B:/app/Spark-TTS-0.5B
     deploy:
       resources:
         reservations:
           devices:
             - driver: nvidia
-              count: 2
+              device_ids: ['0', '1']     # Explicitly name the GPUs (matches CUDA_VISIBLE_DEVICES)
               capabilities: [gpu]
+    # Optional: Add this line if you want to force legacy runtime (but try without first)
+    # runtime: nvidia
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/"]
