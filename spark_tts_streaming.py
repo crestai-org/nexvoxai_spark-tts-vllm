@@ -112,14 +112,15 @@ def initialize_models():
     print("✅ Model loaded successfully!")
     
     # Download tokenizer if needed
-    if not os.path.exists(TOKENIZER_CACHE_DIR):
+    if not os.path.exists(TOKENIZER_CACHE_DIR) or not os.path.exists(f"{TOKENIZER_CACHE_DIR}/config.yaml"):
         print(f"Downloading tokenizer from {TOKENIZER_REPO}...")
         snapshot_download(
             repo_id=TOKENIZER_REPO,
             local_dir=TOKENIZER_CACHE_DIR,
-            ignore_patterns=["*LLM*"],
         )
         print(f"✅ Tokenizer downloaded to {TOKENIZER_CACHE_DIR}")
+    else:
+        print(f"✅ Tokenizer already exists at {TOKENIZER_CACHE_DIR}")
     
     # Initialize audio tokenizer
     try:
