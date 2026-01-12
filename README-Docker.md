@@ -33,16 +33,16 @@ docker run --rm --gpus all nvidia/cuda:12.1.1-base-ubuntu22.04 nvidia-smi
 
 ```bash
 # Build and start the service
-docker-compose up --build
+docker compose up --build
 
 # Run in detached mode
-docker-compose up -d --build
+docker compose up -d --build
 
 # View logs
-docker-compose logs -f
+docker compose logs -f
 
 # Stop the service
-docker-compose down
+docker compose down
 ```
 
 ### Option 2: Using Docker Directly

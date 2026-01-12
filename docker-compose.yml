@@ -7,7 +7,7 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - CUDA_VISIBLE_DEVICES=0
+      - CUDA_VISIBLE_DEVICES=0,1
       - MODEL_NAME=crestai/spark-tts-nexvox-v2
       - TOKENIZER_REPO=unsloth/Spark-TTS-0.5B
       - TOKENIZER_CACHE_DIR=Spark-TTS-0.5B
@@ -23,7 +23,7 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              count: 1
+              count: 2
               capabilities: [gpu]
     restart: unless-stopped
     healthcheck:
