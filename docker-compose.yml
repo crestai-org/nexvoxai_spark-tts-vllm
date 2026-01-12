@@ -12,7 +12,7 @@ services:
       - TOKENIZER_REPO=unsloth/Spark-TTS-0.5B
       - TOKENIZER_CACHE_DIR=Spark-TTS-0.5B
       - SPARK_TTS_REPO_PATH=Spark-TTS
-      - HUGGINGFACE_HUB_TOKEN=your_huggingface_token_here
+      - HF_TOKEN=your_huggingface_token_here
     volumes:
       - ./cache:/app/cache
       - ./Spark-TTS-0.5B:/app/Spark-TTS-0.5B
