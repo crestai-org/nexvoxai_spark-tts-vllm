@@ -13,9 +13,18 @@ services:
       - TOKENIZER_CACHE_DIR=Spark-TTS-0.5B
       - SPARK_TTS_REPO_PATH=Spark-TTS
       - HF_TOKEN=your_huggingface_token_here
+      - NCCL_DEBUG=WARN
+      - NCCL_SOCKET_IFNAME=lo
+      - NCCL_IB_DISABLE=1
+      - NCCL_P2P_DISABLE=1
+      - NCCL_NET_GDR_LEVEL=0
+      - NCCL_SHM_DISABLE=1
+      - NCCL_TREE_THRESHOLD=0
+      - NCCL_RING_THRESHOLD=8388608
     volumes:
       - ./cache:/app/cache
       - ./Spark-TTS-0.5B:/app/Spark-TTS-0.5B
+    shm_size: '2gb'
     deploy:
       resources:
         reservations:
