@@ -8,7 +8,7 @@ services:
       - "8000:8000"
     environment:
       - CUDA_VISIBLE_DEVICES=0,1
-      - MODEL_NAME=crestai/spark-tts-nexvox-v2
+      - MODEL_NAME=crestai/spark-tts-nexvox-v4
       - TOKENIZER_REPO=unsloth/Spark-TTS-0.5B
       - TOKENIZER_CACHE_DIR=Spark-TTS-0.5B
       - SPARK_TTS_REPO_PATH=Spark-TTS

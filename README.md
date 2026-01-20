@@ -66,6 +66,22 @@ The server will start on `http://0.0.0.0:8001`
 | `swahili_male` | 246 | Swahili | Male |
 | `luganda_female` | 248 | Luganda | Female |
 
+### Using Docker Compose (Recommended)
+
+```bash
+# Build and start the service
+docker compose up --build
+
+# Run in detached mode
+docker compose up -d --build
+
+# View logs
+docker compose logs -f
+
+# Stop the service
+docker compose down
+```
+
 ### Endpoints
 
 #### 1. WebSocket Streaming

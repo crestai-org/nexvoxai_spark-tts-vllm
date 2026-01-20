@@ -15,8 +15,8 @@ from vllm.sampling_params import SamplingParams
 from huggingface_hub import snapshot_download
 
 # Configuration
-CUDA_VISIBLE_DEVICES = os.environ.get("CUDA_VISIBLE_DEVICES", "0")
-MODEL_NAME = os.environ.get("MODEL_NAME", "crestai/spark-tts-nexvox-v2")
+CUDA_VISIBLE_DEVICES = os.environ.get("CUDA_VISIBLE_DEVICES", "0,1")
+MODEL_NAME = os.environ.get("MODEL_NAME", "crestai/spark-tts-nexvox-v4")
 TOKENIZER_REPO = os.environ.get("TOKENIZER_REPO", "unsloth/Spark-TTS-0.5B")
 TOKENIZER_CACHE_DIR = os.environ.get("TOKENIZER_CACHE_DIR", "Spark-TTS-0.5B")
 SPARK_TTS_REPO_PATH = os.environ.get("SPARK_TTS_REPO_PATH", "Spark-TTS")
@@ -102,12 +102,13 @@ def initialize_models():
         print(f"Warning: {SPARK_TTS_REPO_PATH} not found. Clone it with:")
         print(f"git clone https://github.com/SparkAudio/Spark-TTS")
     
-    # Load vLLM model
+    # Load vLLM model with tensor parallelism
     print(f"Loading Spark TTS model: {MODEL_NAME}...")
     vllm_model = LLM(
         MODEL_NAME,
         enforce_eager=False,
-        gpu_memory_utilization=0.85
+        gpu_memory_utilization=0.85,
+        tensor_parallel_size=2  # Use GPUs 0 and 1
     )
     print("✅ Model loaded successfully!")
     
