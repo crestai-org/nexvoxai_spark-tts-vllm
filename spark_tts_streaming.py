@@ -28,6 +28,9 @@ os.environ["NCCL_SOCKET_IFNAME"] = "lo"
 os.environ["NCCL_IB_DISABLE"] = "1"
 os.environ["NCCL_P2P_DISABLE"] = "1"
 os.environ["NCCL_NET_GDR_LEVEL"] = "0"
+os.environ["NCCL_SHM_DISABLE"] = "1"
+os.environ["NCCL_TREE_THRESHOLD"] = "0"
+os.environ["NCCL_RING_THRESHOLD"] = "8388608"
 
 # Audio configuration
 AUDIO_SAMPLERATE = 16000
