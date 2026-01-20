@@ -21,7 +21,13 @@ TOKENIZER_REPO = os.environ.get("TOKENIZER_REPO", "unsloth/Spark-TTS-0.5B")
 TOKENIZER_CACHE_DIR = os.environ.get("TOKENIZER_CACHE_DIR", "Spark-TTS-0.5B")
 SPARK_TTS_REPO_PATH = os.environ.get("SPARK_TTS_REPO_PATH", "Spark-TTS")
 
+# Set NCCL environment variables for multi-GPU communication
 os.environ["CUDA_VISIBLE_DEVICES"] = CUDA_VISIBLE_DEVICES
+os.environ["NCCL_DEBUG"] = "WARN"
+os.environ["NCCL_SOCKET_IFNAME"] = "lo"
+os.environ["NCCL_IB_DISABLE"] = "1"
+os.environ["NCCL_P2P_DISABLE"] = "1"
+os.environ["NCCL_NET_GDR_LEVEL"] = "0"
 
 # Audio configuration
 AUDIO_SAMPLERATE = 16000
