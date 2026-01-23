@@ -311,7 +311,9 @@ async def generate_audio_chunks_async(
             print(f"Generated audio shape: {audio_np.shape}, PCM bytes length: {len(pcm_bytes)}")
             
             if len(pcm_bytes) > 0:
+                # Yield immediately for real-time streaming
                 yield pcm_bytes
+                print(f"Streamed audio chunk {i+1}/{len(sentences)} immediately")
             else:
                 print("Warning: Generated empty audio data")
                 
@@ -371,17 +373,20 @@ async def websocket_audio_stream(websocket: WebSocket):
                         "speaker_id": speaker_id
                     })
                     
-                    # Stream audio chunks
+                    # Stream audio chunks immediately as they're generated
                     chunk_count = 0
-                    async for audio_chunk in generate_audio_chunks_async(
+                    async_generator = generate_audio_chunks_async(
                         text=text,
                         speaker_id=speaker_id,
                         temperature=temperature
-                    ):
+                    )
+                    
+                    # Process chunks one by one for real-time streaming
+                    async for audio_chunk in async_generator:
                         chunk_count += 1
-                        print(f"Sending audio chunk {chunk_count}: {len(audio_chunk)} bytes")
+                        print(f"Immediately sending audio chunk {chunk_count}: {len(audio_chunk)} bytes")
                         await websocket.send_bytes(audio_chunk)
-                        print(f"Audio chunk {chunk_count} sent successfully")
+                        print(f"Audio chunk {chunk_count} sent and played immediately")
                     
                     print(f"Finished streaming {chunk_count} audio chunks, sending end message")
                     # Send end message
