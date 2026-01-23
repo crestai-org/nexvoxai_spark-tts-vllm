@@ -5,6 +5,7 @@ FROM nvidia/cuda:12.1.1-devel-ubuntu22.04
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 ENV CUDA_VISIBLE_DEVICES=0,1
+ENV PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 ENV MODEL_NAME=crestai/spark-tts-nexvox-v2
 ENV TOKENIZER_REPO=unsloth/Spark-TTS-0.5B
 ENV TOKENIZER_CACHE_DIR=Spark-TTS-0.5B

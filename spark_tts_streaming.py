@@ -192,7 +192,7 @@ def initialize_models():
     vllm_model = LLM(
         MODEL_NAME,
         enforce_eager=False,
-        gpu_memory_utilization=0.85,
+        gpu_memory_utilization=0.5,
         tensor_parallel_size=2  # Use GPUs 0 and 1
     )
     print("✅ Model loaded successfully!")
@@ -254,16 +254,20 @@ def generate_audio_segment(text: str, speaker_id: int, temperature: float) -> np
     )
     pred_global_ids = torch.tensor([global_tokens]).long()
     
-    # Decode to audio with memory management
+    # Decode to audio with aggressive memory management
     with torch.no_grad():  # Disable gradient computation
         wav_np = audio_tokenizer.detokenize(
             pred_global_ids.to(device), pred_semantic_ids.to(device)
         )
     
-    # Clean up tensors
+    # Aggressive cleanup
     del pred_semantic_ids, pred_global_ids
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
+        torch.cuda.synchronize()  # Ensure all CUDA operations complete
+        # Force garbage collection
+        import gc
+        gc.collect()
     
     return wav_np
 

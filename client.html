@@ -1,382 +1,104 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Spark TTS WebSocket Streaming Client</title>
-    <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            padding: 20px;
-        }
-
-        .container {
-            max-width: 800px;
-            margin: 0 auto;
-            background: white;
-            border-radius: 16px;
-            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
-            overflow: hidden;
-        }
-
-        .header {
-            background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
-            color: white;
-            padding: 30px;
-            text-align: center;
-        }
-
-        .header h1 {
-            font-size: 2rem;
-            margin-bottom: 10px;
-        }
-
-        .header p {
-            opacity: 0.9;
-            font-size: 1.1rem;
-        }
-
-        .main {
-            padding: 30px;
-        }
-
-        .connection-status {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            padding: 15px;
-            border-radius: 8px;
-            margin-bottom: 20px;
-            font-weight: 500;
-        }
-
-        .connection-status.connected {
-            background: #10b981;
-            color: white;
-        }
-
-        .connection-status.disconnected {
-            background: #ef4444;
-            color: white;
-        }
-
-        .connection-status.connecting {
-            background: #f59e0b;
-            color: white;
-        }
-
-        .status-dot {
-            width: 10px;
-            height: 10px;
-            border-radius: 50%;
-            background: currentColor;
-            animation: pulse 2s infinite;
-        }
-
-        @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.5; }
-        }
-
-        .form-group {
-            margin-bottom: 20px;
-        }
-
-        label {
-            display: block;
-            margin-bottom: 8px;
-            font-weight: 600;
-            color: #374151;
-        }
-
-        input, select, textarea {
-            width: 100%;
-            padding: 12px;
-            border: 2px solid #e5e7eb;
-            border-radius: 8px;
-            font-size: 1rem;
-            transition: border-color 0.2s;
-        }
-
-        input:focus, select:focus, textarea:focus {
-            outline: none;
-            border-color: #4f46e5;
-        }
-
-        textarea {
-            resize: vertical;
-            min-height: 100px;
-        }
-
-        .form-row {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 15px;
-        }
-
-        .button-group {
-            display: flex;
-            gap: 10px;
-            margin-bottom: 20px;
-        }
-
-        button {
-            padding: 12px 24px;
-            border: none;
-            border-radius: 8px;
-            font-size: 1rem;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.2s;
-        }
-
-        .btn-primary {
-            background: #4f46e5;
-            color: white;
-        }
-
-        .btn-primary:hover:not(:disabled) {
-            background: #4338ca;
-            transform: translateY(-1px);
-        }
-
-        .btn-secondary {
-            background: #6b7280;
-            color: white;
-        }
-
-        .btn-secondary:hover:not(:disabled) {
-            background: #4b5563;
-        }
-
-        .btn-danger {
-            background: #ef4444;
-            color: white;
-        }
-
-        .btn-danger:hover:not(:disabled) {
-            background: #dc2626;
-        }
-
-        button:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
-
-        .audio-player {
-            background: #f9fafb;
-            border: 2px solid #e5e7eb;
-            border-radius: 8px;
-            padding: 20px;
-            margin-bottom: 20px;
-        }
-
-        .audio-player h3 {
-            margin-bottom: 15px;
-            color: #374151;
-        }
-
-        audio {
-            width: 100%;
-            margin-bottom: 10px;
-        }
-
-        .audio-info {
-            font-size: 0.9rem;
-            color: #6b7280;
-        }
-
-        .logs {
-            background: #1f2937;
-            color: #f9fafb;
-            border-radius: 8px;
-            padding: 20px;
-            font-family: 'Courier New', monospace;
-            font-size: 0.9rem;
-            max-height: 300px;
-            overflow-y: auto;
-        }
-
-        .log-entry {
-            margin-bottom: 5px;
-            padding: 5px;
-            border-radius: 4px;
-        }
-
-        .log-entry.info {
-            color: #60a5fa;
-        }
-
-        .log-entry.success {
-            color: #34d399;
-        }
-
-        .log-entry.error {
-            color: #f87171;
-        }
-
-        .log-entry.warning {
-            color: #fbbf24;
-        }
-
-        .clear-logs {
-            margin-top: 10px;
-            background: #374151;
-            color: white;
-            padding: 8px 16px;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 0.9rem;
-        }
-
-        .clear-logs:hover {
-            background: #4b5563;
-        }
-
-        @media (max-width: 640px) {
-            .form-row {
-                grid-template-columns: 1fr;
-            }
-            
-            .button-group {
-                flex-direction: column;
-            }
-        }
-    </style>
+    <title>Spark TTS WebSocket Test</title>
 </head>
 <body>
-    <div class="container">
-        <div class="header">
-            <h1>🎤 Spark TTS WebSocket Client</h1>
-            <p>Test real-time text-to-speech streaming</p>
-        </div>
-
-        <div class="main">
-            <div id="connectionStatus" class="connection-status disconnected">
-                <div class="status-dot"></div>
-                <span id="statusText">Disconnected</span>
-            </div>
-
-            <div class="button-group">
-                <button id="connectBtn" class="btn-primary" onclick="connect()">Connect</button>
-                <button id="disconnectBtn" class="btn-secondary" onclick="disconnect()" disabled>Disconnect</button>
-                <button id="clearAudioBtn" class="btn-danger" onclick="clearAudio()">Clear Audio</button>
-            </div>
-
-            <form id="ttsForm" onsubmit="sendTTSRequest(event)">
-                <div class="form-group">
-                    <label for="serverUrl">Server URL:</label>
-                    <input type="text" id="serverUrl" value="ws://35.203.124.213:8000/v1/audio/speech/stream/ws" required>
-                </div>
-
-                <div class="form-group">
-                    <label for="textInput">Text to convert:</label>
-                    <textarea id="textInput" placeholder="Enter your text here..." required>Hello, this is a test of the Spark TTS streaming system. I hope it works well!</textarea>
-                </div>
-
-                <div class="form-row">
-                    <div class="form-group">
-                        <label for="voiceSelect">Voice:</label>
-                        <select id="voiceSelect">
-                            <option value="acholi_female">Acholi Female</option>
-                            <option value="ateso_female">Ateso Female</option>
-                            <option value="runyankore_female" selected>Runyankore Female</option>
-                            <option value="lugbara_female">Lugbara Female</option>
-                            <option value="swahili_male">Swahili Male</option>
-                            <option value="luganda_female">Luganda Female</option>
-                        </select>
-                    </div>
-
-                    <div class="form-group">
-                        <label for="temperature">Temperature (0.1-2.0):</label>
-                        <input type="number" id="temperature" min="0.1" max="2.0" step="0.1" value="0.7">
-                    </div>
-                </div>
-
-                <button type="submit" class="btn-primary" id="generateBtn" disabled>Generate Speech</button>
-            </form>
-
-            <div class="audio-player">
-                <h3>🔊 Generated Audio</h3>
-                <audio id="audioPlayer" controls></audio>
-                <div class="audio-info">
-                    <p>Sample Rate: 16,000 Hz | Bit Depth: 16-bit | Channels: 1 (Mono)</p>
-                    <p id="audioStatus">No audio generated yet</p>
-                </div>
-            </div>
-
-            <div class="logs">
-                <h3 style="margin-bottom: 15px;">📋 Connection Logs</h3>
-                <div id="logs"></div>
-                <button class="clear-logs" onclick="clearLogs()">Clear Logs</button>
-            </div>
-        </div>
+    <h1>Spark TTS WebSocket Test</h1>
+    
+    <div>
+        <label>Server URL:</label>
+        <input type="text" id="serverUrl" value="ws://35.203.124.213:8000/v1/audio/speech/stream/ws" style="width: 400px;">
+        <button onclick="connect()">Connect</button>
+        <button onclick="disconnect()">Disconnect</button>
+    </div>
+    
+    <div>
+        <label>Connection Status:</label>
+        <span id="connectionStatus">Disconnected</span>
+    </div>
+    
+    <div>
+        <label>Text:</label>
+        <textarea id="textInput" rows="4" cols="50" placeholder="Enter text to convert to speech...">Hello, this is a test of the Spark TTS streaming system. I hope it works well!</textarea>
+    </div>
+    
+    <div>
+        <label>Voice:</label>
+        <select id="voiceSelect">
+            <option value="acholi_female">Acholi Female</option>
+            <option value="ateso_female">Ateso Female</option>
+            <option value="runyankore_female" selected>Runyankore Female</option>
+            <option value="lugbara_female">Lugbara Female</option>
+            <option value="swahili_male">Swahili Male</option>
+            <option value="luganda_female">Luganda Female</option>
+        </select>
+    </div>
+    
+    <div>
+        <label>Temperature:</label>
+        <input type="range" id="temperatureSlider" min="0.1" max="1.0" step="0.1" value="0.7">
+        <span id="temperatureValue">0.7</span>
+    </div>
+    
+    <div>
+        <button onclick="sendRequest()">Generate Speech</button>
+        <button onclick="clearAudio()">Clear Audio</button>
+        <button onclick="clearLogs()">Clear Logs</button>
+    </div>
+    
+    <div>
+        <label>Audio Status:</label>
+        <span id="audioStatus">Ready</span>
+    </div>
+    
+    <div>
+        <h3>Connection Logs:</h3>
+        <div id="logs" style="height: 200px; overflow-y: scroll; border: 1px solid #ccc; padding: 10px; font-family: monospace; font-size: 12px; white-space: pre-wrap;"></div>
     </div>
 
     <script>
         let websocket = null;
         let audioContext = null;
-        let currentSource = null;
-        let audioBufferQueue = [];
         let isPlaying = false;
-        let currentSegmentId = null;
         let isReceivingAudio = false;
+        let currentSegmentId = null;
+        let audioBufferQueue = [];
 
-        function initializeAudioContext() {
-            if (!audioContext) {
-                audioContext = new (window.AudioContext || window.webkitAudioContext)();
-                audioContext.sampleRate = 16000; // Match server sample rate
-                addLog(`Audio context initialized with sample rate: ${audioContext.sampleRate}`, 'success');
-            }
-        }
+        // Temperature slider update
+        document.getElementById('temperatureSlider').addEventListener('input', function(e) {
+            document.getElementById('temperatureValue').textContent = e.target.value;
+        });
 
         function addLog(message, type = 'info') {
             const logs = document.getElementById('logs');
             const timestamp = new Date().toLocaleTimeString();
             const logEntry = document.createElement('div');
-            logEntry.className = `log-entry ${type}`;
             logEntry.textContent = `[${timestamp}] ${message}`;
+            
+            // Simple color coding
+            if (type === 'error') {
+                logEntry.style.color = 'red';
+            } else if (type === 'success') {
+                logEntry.style.color = 'green';
+            } else if (type === 'warning') {
+                logEntry.style.color = 'orange';
+            } else if (type === 'debug') {
+                logEntry.style.color = 'gray';
+            }
+            
             logs.appendChild(logEntry);
             logs.scrollTop = logs.scrollHeight;
         }
 
         function updateConnectionStatus(status) {
-            const statusElement = document.getElementById('connectionStatus');
-            const statusText = document.getElementById('statusText');
-            const connectBtn = document.getElementById('connectBtn');
-            const disconnectBtn = document.getElementById('disconnectBtn');
-            const generateBtn = document.getElementById('generateBtn');
+            document.getElementById('connectionStatus').textContent = status;
+        }
 
-            statusElement.className = `connection-status ${status}`;
-            
-            switch(status) {
-                case 'connected':
-                    statusText.textContent = 'Connected';
-                    connectBtn.disabled = true;
-                    disconnectBtn.disabled = false;
-                    generateBtn.disabled = false;
-                    break;
-                case 'connecting':
-                    statusText.textContent = 'Connecting...';
-                    connectBtn.disabled = true;
-                    disconnectBtn.disabled = false;
-                    generateBtn.disabled = true;
-                    break;
-                case 'disconnected':
-                    statusText.textContent = 'Disconnected';
-                    connectBtn.disabled = false;
-                    disconnectBtn.disabled = true;
-                    generateBtn.disabled = true;
-                    break;
+        function initializeAudioContext() {
+            if (!audioContext) {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                addLog(`Audio context initialized with sample rate: ${audioContext.sampleRate}`, 'info');
             }
         }
 
@@ -431,14 +153,13 @@
                 };
 
                 websocket.onclose = function(event) {
-                    addLog(`WebSocket closed: ${event.code} - ${event.reason}`, 'warning');
                     updateConnectionStatus('disconnected');
-                    websocket = null;
+                    addLog(`WebSocket connection closed: ${event.code} ${event.reason}`, 'info');
                 };
 
             } catch (error) {
-                addLog(`Connection error: ${error.message}`, 'error');
-                updateConnectionStatus('disconnected');
+                addLog(`Error creating WebSocket: ${error.message}`, 'error');
+                updateConnectionStatus('error');
             }
         }
 
@@ -451,10 +172,42 @@
             addLog('Disconnected from server', 'info');
         }
 
+        function sendRequest() {
+            if (!websocket || websocket.readyState !== WebSocket.OPEN) {
+                addLog('WebSocket is not connected', 'error');
+                return;
+            }
+
+            const text = document.getElementById('textInput').value.trim();
+            const voice = document.getElementById('voiceSelect').value;
+            const temperature = parseFloat(document.getElementById('temperatureSlider').value);
+            
+            if (!text) {
+                addLog('Please enter some text', 'warning');
+                return;
+            }
+
+            const segmentId = `segment_${Date.now()}`;
+            const request = {
+                input: text,
+                voice: voice,
+                temperature: temperature,
+                segment_id: segmentId
+            };
+
+            addLog(`Sending request: ${JSON.stringify(request)}`, 'info');
+            
+            try {
+                websocket.send(JSON.stringify(request));
+            } catch (error) {
+                addLog(`Error sending request: ${error.message}`, 'error');
+            }
+        }
+
         function handleJSONMessage(message) {
             addLog(`Received: ${JSON.stringify(message)}`, 'info');
             
-            switch(message.type) {
+            switch (message.type) {
                 case 'start':
                     currentSegmentId = message.segment_id;
                     isReceivingAudio = true;
@@ -465,12 +218,18 @@
                     document.getElementById('audioStatus').textContent = 'Receiving and playing audio...';
                     break;
                 case 'end':
-                    isReceivingAudio = false;
-                    addLog(`Finished receiving audio for segment: ${currentSegmentId}`, 'success');
-                    if (audioBufferQueue.length === 0 && !isPlaying) {
-                        document.getElementById('audioStatus').textContent = 'Audio playback complete';
-                    }
-                    currentSegmentId = null;
+                    // Don't immediately set isReceivingAudio to false
+                    // Let any pending audio chunks be processed first
+                    addLog(`Received end message for segment: ${currentSegmentId}`, 'debug');
+                    // Use a timeout to ensure all pending audio chunks are processed
+                    setTimeout(() => {
+                        isReceivingAudio = false;
+                        addLog(`Finished receiving audio for segment: ${currentSegmentId}`, 'success');
+                        if (audioBufferQueue.length === 0 && !isPlaying) {
+                            document.getElementById('audioStatus').textContent = 'Audio playback complete';
+                        }
+                        currentSegmentId = null;
+                    }, 100); // 100ms delay to process pending chunks
                     break;
                 case 'error':
                     addLog(`Server error: ${message.message}`, 'error');
@@ -482,8 +241,10 @@
         }
 
         function handleAudioData(data) {
+            const chunkSize = data.byteLength || data.length || 0;
+            addLog(`handleAudioData called: ${chunkSize} bytes, isReceivingAudio: ${isReceivingAudio}`, 'debug');
+            
             if (isReceivingAudio) {
-                const chunkSize = data.byteLength || data.length || 0;
                 addLog(`Received audio chunk: ${chunkSize} bytes`, 'info');
                 
                 if (chunkSize > 0) {
@@ -501,6 +262,7 @@
                     audioBuffer.getChannelData(0).set(float32Array);
                     
                     audioBufferQueue.push(audioBuffer);
+                    addLog(`Audio buffer queued. Queue length: ${audioBufferQueue.length}`, 'debug');
                     
                     // Start playback if not already playing
                     if (!isPlaying) {
@@ -509,6 +271,8 @@
                 } else {
                     addLog('Warning: Received empty audio chunk', 'warning');
                 }
+            } else {
+                addLog(`Warning: Received audio data but not receiving audio (isReceivingAudio=${isReceivingAudio})`, 'warning');
             }
         }
 
@@ -543,43 +307,12 @@
             addLog(`Playing audio buffer: ${audioBuffer.length} samples`, 'info');
         }
 
-        function sendTTSRequest(event) {
-            event.preventDefault();
-            
-            if (!websocket || websocket.readyState !== WebSocket.OPEN) {
-                addLog('Not connected to server', 'error');
-                return;
-            }
-
-            const text = document.getElementById('textInput').value;
-            const voice = document.getElementById('voiceSelect').value;
-            const temperature = parseFloat(document.getElementById('temperature').value);
-            const segmentId = `segment_${Date.now()}`;
-
-            const message = {
-                input: text,
-                voice: voice,
-                temperature: temperature,
-                segment_id: segmentId
-            };
-
-            addLog(`Sending request: ${JSON.stringify(message)}`, 'info');
-            websocket.send(JSON.stringify(message));
-        }
-
         function clearAudio() {
-            // Stop any playing audio
-            if (currentSource) {
-                currentSource.stop();
-                currentSource = null;
-            }
-            
-            // Clear the audio buffer queue
             audioBufferQueue = [];
             isPlaying = false;
-            
-            // Update UI
-            document.getElementById('audioStatus').textContent = 'No audio generated yet';
+            isReceivingAudio = false;
+            currentSegmentId = null;
+            document.getElementById('audioStatus').textContent = 'Audio cleared';
             addLog('Audio cleared', 'info');
         }
 
@@ -588,10 +321,10 @@
             addLog('Logs cleared', 'info');
         }
 
-        // Auto-connect on page load
-        window.addEventListener('load', function() {
+        // Initialize on page load
+        window.onload = function() {
             addLog('Page loaded. Ready to connect.', 'info');
-        });
+        };
     </script>
 </body>
 </html>
