@@ -187,13 +187,13 @@ def initialize_models():
         print(f"Warning: {SPARK_TTS_REPO_PATH} not found. Clone it with:")
         print(f"git clone https://github.com/SparkAudio/Spark-TTS")
     
-    # Load vLLM model with tensor parallelism
+    # Load vLLM model with single GPU to avoid tensor parallelism issues
     print(f"Loading Spark TTS model: {MODEL_NAME}...")
     vllm_model = LLM(
         MODEL_NAME,
         enforce_eager=False,
         gpu_memory_utilization=0.5,
-        tensor_parallel_size=2  # Use GPUs 0 and 1
+        tensor_parallel_size=1  # Use single GPU to avoid multi-GPU issues
     )
     print("✅ Model loaded successfully!")
     
