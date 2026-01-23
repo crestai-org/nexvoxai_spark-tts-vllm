@@ -12,7 +12,7 @@ services:
       - TOKENIZER_REPO=unsloth/Spark-TTS-0.5B
       - TOKENIZER_CACHE_DIR=Spark-TTS-0.5B
       - SPARK_TTS_REPO_PATH=Spark-TTS
-      - HF_TOKEN=your_huggingface_token_here
+      - HF_TOKEN=
       - NCCL_DEBUG=WARN
       - NCCL_SOCKET_IFNAME=lo
       - NCCL_IB_DISABLE=1

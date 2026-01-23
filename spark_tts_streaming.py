@@ -282,7 +282,9 @@ async def websocket_audio_stream(websocket: WebSocket):
                         speaker_id=speaker_id,
                         temperature=temperature
                     ):
+                        print(f"Sending audio chunk: {len(audio_chunk)} bytes")
                         await websocket.send_bytes(audio_chunk)
+                        print(f"Audio chunk sent successfully")
                     
                     # Send end message
                     await websocket.send_json({
