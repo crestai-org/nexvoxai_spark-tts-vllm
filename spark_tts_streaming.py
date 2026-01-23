@@ -91,31 +91,10 @@ class AudioRequest(BaseModel):
 
 
 def chunk_text_simple(text: str) -> List[str]:
-    """Split text into very small chunks to completely avoid memory issues."""
-    # First split by sentences
+    """Split text into complete sentences to preserve semantic meaning."""
+    # Split by sentences only - preserve complete thoughts
     sentences = re.split(r'(?<=[.!?])\s+', text.strip())
-    sentences = [s.strip() for s in sentences if s.strip()]
-    
-    # Split ALL sentences into very small chunks (40 chars max)
-    chunks = []
-    for sentence in sentences:
-        if len(sentence) > 40:
-            # Split all sentences into very small parts
-            words = sentence.split()
-            current_chunk = ""
-            for word in words:
-                if len(current_chunk + " " + word) <= 40:
-                    current_chunk += (" " if current_chunk else "") + word
-                else:
-                    if current_chunk:
-                        chunks.append(current_chunk)
-                    current_chunk = word
-            if current_chunk:
-                chunks.append(current_chunk)
-        else:
-            chunks.append(sentence)
-    
-    return chunks
+    return [s.strip() for s in sentences if s.strip()]
 
 
 def initialize_models():
