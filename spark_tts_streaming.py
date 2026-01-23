@@ -90,11 +90,86 @@ class AudioRequest(BaseModel):
     max_tokens: int = DEFAULT_MAX_TOKENS
 
 
+def chunk_text(text: str, max_chunk_size: int = 500) -> List[str]:
+    """
+    Split text into chunks based on sentence boundaries.
+    
+    This approach preserves natural sentence flow and intonation for TTS.
+    
+    Args:
+        text: The input string to chunk
+        max_chunk_size: Maximum character length per chunk (soft limit)
+    
+    Returns:
+        List of text chunks, each containing one or more complete sentences
+    """
+    # Split on sentence-ending punctuation (. ! ?) followed by whitespace
+    sentences = re.split(r'(?<=[.!?])\s+', text.strip())
+    
+    chunks: List[str] = []
+    current_chunk: List[str] = []
+    current_length = 0
+    
+    for sentence in sentences:
+        sentence = sentence.strip()
+        if not sentence:
+            continue
+        
+        sentence_length = len(sentence)
+        
+        # Start new chunk if adding this sentence would exceed limit
+        if current_chunk and (current_length + sentence_length + 1) > max_chunk_size:
+            chunks.append(' '.join(current_chunk))
+            current_chunk = []
+            current_length = 0
+        
+        current_chunk.append(sentence)
+        current_length += sentence_length + 1
+    
+    # Add the final chunk
+    if current_chunk:
+        chunks.append(' '.join(current_chunk))
+    
+    return chunks
+
+
 def chunk_text_simple(text: str) -> List[str]:
-    """Split text into complete sentences to preserve semantic meaning."""
-    # Split by sentences only - preserve complete thoughts
+    """
+    Split text into individual sentences.
+    
+    Recommended for TTS - provides maximum control with one sentence per chunk.
+    
+    Args:
+        text: The input string to chunk
+    
+    Returns:
+        List of individual sentences
+    """
     sentences = re.split(r'(?<=[.!?])\s+', text.strip())
     return [s.strip() for s in sentences if s.strip()]
+
+
+def chunk_text_with_count(text: str, sentences_per_chunk: int = 3) -> List[str]:
+    """
+    Split text into chunks containing a specific number of sentences.
+    
+    Args:
+        text: The input string to chunk
+        sentences_per_chunk: Number of sentences to include in each chunk
+    
+    Returns:
+        List of text chunks
+    """
+    sentences = re.split(r'(?<=[.!?])\s+', text.strip())
+    sentences = [s.strip() for s in sentences if s.strip()]
+    
+    chunks: List[str] = []
+    
+    for i in range(0, len(sentences), sentences_per_chunk):
+        chunk = ' '.join(sentences[i:i + sentences_per_chunk])
+        chunks.append(chunk)
+    
+    return chunks
 
 
 def initialize_models():
@@ -293,15 +368,18 @@ async def websocket_audio_stream(websocket: WebSocket):
                     })
                     
                     # Stream audio chunks
+                    chunk_count = 0
                     async for audio_chunk in generate_audio_chunks_async(
                         text=text,
                         speaker_id=speaker_id,
                         temperature=temperature
                     ):
-                        print(f"Sending audio chunk: {len(audio_chunk)} bytes")
+                        chunk_count += 1
+                        print(f"Sending audio chunk {chunk_count}: {len(audio_chunk)} bytes")
                         await websocket.send_bytes(audio_chunk)
-                        print(f"Audio chunk sent successfully")
+                        print(f"Audio chunk {chunk_count} sent successfully")
                     
+                    print(f"Finished streaming {chunk_count} audio chunks, sending end message")
                     # Send end message
                     await websocket.send_json({
                         "type": "end",
