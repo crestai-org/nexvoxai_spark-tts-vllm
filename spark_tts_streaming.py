@@ -213,8 +213,12 @@ async def generate_audio_chunks_async(
             # Convert to PCM bytes
             pcm_bytes = convert_to_pcm16_bytes(audio_np)
             
-            if pcm_bytes:
+            print(f"Generated audio shape: {audio_np.shape}, PCM bytes length: {len(pcm_bytes)}")
+            
+            if len(pcm_bytes) > 0:
                 yield pcm_bytes
+            else:
+                print("Warning: Generated empty audio data")
                 
     except Exception as e:
         print(f"Error during audio generation: {e}")
