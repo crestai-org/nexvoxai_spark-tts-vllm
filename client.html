@@ -324,9 +324,20 @@
 
     <script>
         let websocket = null;
-        let audioChunks = [];
+        let audioContext = null;
+        let currentSource = null;
+        let audioBufferQueue = [];
+        let isPlaying = false;
         let currentSegmentId = null;
         let isReceivingAudio = false;
+
+        function initializeAudioContext() {
+            if (!audioContext) {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                audioContext.sampleRate = 16000; // Match server sample rate
+                addLog(`Audio context initialized with sample rate: ${audioContext.sampleRate}`, 'success');
+            }
+        }
 
         function addLog(message, type = 'info') {
             const logs = document.getElementById('logs');
@@ -396,8 +407,15 @@
                         } catch (e) {
                             addLog(`Failed to parse JSON: ${event.data}`, 'error');
                         }
+                    } else if (event.data instanceof Blob) {
+                        // Binary data as Blob (common in some WebSocket implementations)
+                        event.data.arrayBuffer().then(buffer => {
+                            handleAudioData(buffer);
+                        }).catch(e => {
+                            addLog(`Error reading Blob: ${e.message}`, 'error');
+                        });
                     } else {
-                        // Binary audio data
+                        // Binary data as ArrayBuffer
                         handleAudioData(event.data);
                     }
                 };
@@ -435,16 +453,18 @@
                 case 'start':
                     currentSegmentId = message.segment_id;
                     isReceivingAudio = true;
-                    audioChunks = [];
+                    audioBufferQueue = []; // Clear any previous audio
+                    isPlaying = false;
+                    initializeAudioContext(); // Initialize audio context on first use
                     addLog(`Started receiving audio for segment: ${currentSegmentId}`, 'success');
-                    document.getElementById('audioStatus').textContent = 'Receiving audio...';
+                    document.getElementById('audioStatus').textContent = 'Receiving and playing audio...';
                     break;
                 case 'end':
-                    if (isReceivingAudio && audioChunks.length > 0) {
-                        createAudioFromChunks();
-                        addLog(`Finished receiving audio for segment: ${currentSegmentId}`, 'success');
-                    }
                     isReceivingAudio = false;
+                    addLog(`Finished receiving audio for segment: ${currentSegmentId}`, 'success');
+                    if (audioBufferQueue.length === 0 && !isPlaying) {
+                        document.getElementById('audioStatus').textContent = 'Audio playback complete';
+                    }
                     currentSegmentId = null;
                     break;
                 case 'error':
@@ -462,96 +482,60 @@
                 addLog(`Received audio chunk: ${chunkSize} bytes`, 'info');
                 
                 if (chunkSize > 0) {
-                    audioChunks.push(data);
+                    // Convert PCM data to Float32Array for Web Audio API
+                    const int16Array = new Int16Array(data);
+                    const float32Array = new Float32Array(int16Array.length);
+                    
+                    // Convert int16 to float32 (-1.0 to 1.0)
+                    for (let i = 0; i < int16Array.length; i++) {
+                        float32Array[i] = int16Array[i] / 32768.0;
+                    }
+                    
+                    // Create audio buffer and queue for playback
+                    const audioBuffer = audioContext.createBuffer(1, float32Array.length, 16000);
+                    audioBuffer.getChannelData(0).set(float32Array);
+                    
+                    audioBufferQueue.push(audioBuffer);
+                    
+                    // Start playback if not already playing
+                    if (!isPlaying) {
+                        startPlayback();
+                    }
                 } else {
                     addLog('Warning: Received empty audio chunk', 'warning');
                 }
             }
         }
 
-        function createAudioFromChunks() {
-            try {
-                if (audioChunks.length === 0) {
-                    addLog('No audio chunks received', 'warning');
-                    document.getElementById('audioStatus').textContent = 'No audio data received';
-                    return;
-                }
-
-                // Combine all audio chunks
-                const totalLength = audioChunks.reduce((sum, chunk) => sum + (chunk.byteLength || chunk.length || 0), 0);
-                
-                if (totalLength === 0) {
-                    addLog('All audio chunks are empty', 'warning');
-                    document.getElementById('audioStatus').textContent = 'Received empty audio data';
-                    return;
-                }
-
-                addLog(`Creating audio from ${audioChunks.length} chunks, total size: ${totalLength} bytes`, 'info');
-
-                const combinedArray = new Uint8Array(totalLength);
-                let offset = 0;
-                
-                for (const chunk of audioChunks) {
-                    const chunkArray = new Uint8Array(chunk);
-                    combinedArray.set(chunkArray, offset);
-                    offset += chunkArray.length;
-                }
-
-                // Create WAV header for PCM data
-                const wavHeader = createWAVHeader(totalLength, 16000, 1, 16);
-                const wavFile = new Uint8Array(wavHeader.byteLength + totalLength);
-                wavFile.set(new Uint8Array(wavHeader), 0);
-                wavFile.set(combinedArray, wavHeader.byteLength);
-
-                // Create blob and audio URL
-                const blob = new Blob([wavFile], { type: 'audio/wav' });
-                const audioUrl = URL.createObjectURL(blob);
-                
-                // Set audio player source
-                const audioPlayer = document.getElementById('audioPlayer');
-                audioPlayer.src = audioUrl;
-                
-                document.getElementById('audioStatus').textContent = 
-                    `Audio ready (${(totalLength / 1024).toFixed(1)} KB)`;
-                
-                addLog(`Audio created successfully: ${(totalLength / 1024).toFixed(1)} KB`, 'success');
-                
-            } catch (error) {
-                addLog(`Error creating audio: ${error.message}`, 'error');
-                document.getElementById('audioStatus').textContent = 'Error creating audio';
-            }
+        function startPlayback() {
+            if (audioBufferQueue.length === 0 || isPlaying) return;
+            
+            isPlaying = true;
+            document.getElementById('audioStatus').textContent = 'Playing streaming audio...';
+            playNextBuffer();
         }
 
-        function createWAVHeader(dataLength, sampleRate, channels, bitsPerSample) {
-            const buffer = new ArrayBuffer(44);
-            const view = new DataView(buffer);
+        function playNextBuffer() {
+            if (audioBufferQueue.length === 0) {
+                isPlaying = false;
+                if (!isReceivingAudio) {
+                    document.getElementById('audioStatus').textContent = 'Playback complete';
+                }
+                return;
+            }
             
-            const bytesPerSample = bitsPerSample / 8;
-            const blockAlign = channels * bytesPerSample;
-            const byteRate = sampleRate * blockAlign;
-            const dataSize = dataLength;
-            const fileSize = 36 + dataSize;
+            const audioBuffer = audioBufferQueue.shift();
+            const source = audioContext.createBufferSource();
+            source.buffer = audioBuffer;
+            source.connect(audioContext.destination);
             
-            // RIFF chunk descriptor
-            view.setUint32(0, 0x46464952, true); // "RIFF"
-            view.setUint32(4, fileSize, true); // File size
-            view.setUint32(8, 0x45564157, true); // "WAVE"
+            source.onended = function() {
+                // Play next buffer immediately after current one ends
+                playNextBuffer();
+            };
             
-            // fmt subchunk
-            view.setUint32(12, 0x20746d66, true); // "fmt "
-            view.setUint32(16, 16, true); // Subchunk size
-            view.setUint16(20, 1, true); // Audio format (PCM)
-            view.setUint16(22, channels, true); // Number of channels
-            view.setUint32(24, sampleRate, true); // Sample rate
-            view.setUint32(28, byteRate, true); // Byte rate
-            view.setUint16(32, blockAlign, true); // Block align
-            view.setUint16(34, bitsPerSample, true); // Bits per sample
-            
-            // data subchunk
-            view.setUint32(36, 0x61746164, true); // "data"
-            view.setUint32(40, dataSize, true); // Data size
-            
-            return buffer;
+            source.start();
+            addLog(`Playing audio buffer: ${audioBuffer.length} samples`, 'info');
         }
 
         function sendTTSRequest(event) {
@@ -579,10 +563,18 @@
         }
 
         function clearAudio() {
-            const audioPlayer = document.getElementById('audioPlayer');
-            audioPlayer.src = '';
+            // Stop any playing audio
+            if (currentSource) {
+                currentSource.stop();
+                currentSource = null;
+            }
+            
+            // Clear the audio buffer queue
+            audioBufferQueue = [];
+            isPlaying = false;
+            
+            // Update UI
             document.getElementById('audioStatus').textContent = 'No audio generated yet';
-            audioChunks = [];
             addLog('Audio cleared', 'info');
         }
 

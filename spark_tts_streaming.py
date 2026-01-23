@@ -91,9 +91,31 @@ class AudioRequest(BaseModel):
 
 
 def chunk_text_simple(text: str) -> List[str]:
-    """Split text into individual sentences."""
+    """Split text into very small chunks to completely avoid memory issues."""
+    # First split by sentences
     sentences = re.split(r'(?<=[.!?])\s+', text.strip())
-    return [s.strip() for s in sentences if s.strip()]
+    sentences = [s.strip() for s in sentences if s.strip()]
+    
+    # Split ALL sentences into very small chunks (40 chars max)
+    chunks = []
+    for sentence in sentences:
+        if len(sentence) > 40:
+            # Split all sentences into very small parts
+            words = sentence.split()
+            current_chunk = ""
+            for word in words:
+                if len(current_chunk + " " + word) <= 40:
+                    current_chunk += (" " if current_chunk else "") + word
+                else:
+                    if current_chunk:
+                        chunks.append(current_chunk)
+                    current_chunk = word
+            if current_chunk:
+                chunks.append(current_chunk)
+        else:
+            chunks.append(sentence)
+    
+    return chunks
 
 
 def initialize_models():
@@ -144,8 +166,12 @@ def initialize_models():
 
 
 def generate_audio_segment(text: str, speaker_id: int, temperature: float) -> np.ndarray:
-    """Generate audio for a single text segment."""
+    """Generate audio for a single text segment with strict memory limits."""
     global_tokens = GLOBAL_IDS_BY_SPEAKER[speaker_id]
+    
+    # Clear CUDA cache before processing
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
     
     # Create prompt
     prompt = f"<|task_tts|><|start_content|>{speaker_id}: {text}<|end_content|><|start_global_token|>"
@@ -163,16 +189,27 @@ def generate_audio_segment(text: str, speaker_id: int, temperature: float) -> np
     if not semantic_matches:
         raise ValueError("No semantic tokens found in the generated output.")
     
+    # Strict semantic token limit to prevent memory issues
+    if len(semantic_matches) > 800:
+        semantic_matches = semantic_matches[:800]
+        print(f"Limited semantic tokens to 800 for memory safety")
+    
     # Convert to tensors
     pred_semantic_ids = (
         torch.tensor([int(token) for token in semantic_matches]).long().unsqueeze(0)
     )
     pred_global_ids = torch.tensor([global_tokens]).long()
     
-    # Decode to audio
-    wav_np = audio_tokenizer.detokenize(
-        pred_global_ids.to(device), pred_semantic_ids.to(device)
-    )
+    # Decode to audio with memory management
+    with torch.no_grad():  # Disable gradient computation
+        wav_np = audio_tokenizer.detokenize(
+            pred_global_ids.to(device), pred_semantic_ids.to(device)
+        )
+    
+    # Clean up tensors
+    del pred_semantic_ids, pred_global_ids
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
     
     return wav_np
 
