@@ -399,16 +399,20 @@
                 };
 
                 websocket.onmessage = function(event) {
+                    addLog(`Received message type: ${typeof event.data}, size: ${event.data.size || event.data.length || 'unknown'}`, 'debug');
+                    
                     if (typeof event.data === 'string') {
                         // JSON message
                         try {
                             const message = JSON.parse(event.data);
+                            addLog(`Received JSON: ${JSON.stringify(message)}`, 'debug');
                             handleJSONMessage(message);
                         } catch (e) {
                             addLog(`Failed to parse JSON: ${event.data}`, 'error');
                         }
                     } else if (event.data instanceof Blob) {
                         // Binary data as Blob (common in some WebSocket implementations)
+                        addLog(`Received Blob data: ${event.data.size} bytes`, 'debug');
                         event.data.arrayBuffer().then(buffer => {
                             handleAudioData(buffer);
                         }).catch(e => {
@@ -416,6 +420,7 @@
                         });
                     } else {
                         // Binary data as ArrayBuffer
+                        addLog(`Received ArrayBuffer data: ${event.data.byteLength} bytes`, 'debug');
                         handleAudioData(event.data);
                     }
                 };
