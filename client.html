@@ -114,8 +114,18 @@
 
             try {
                 websocket = new WebSocket(url);
+                
+                // Set connection timeout
+                const connectionTimeout = setTimeout(() => {
+                    if (websocket.readyState === WebSocket.CONNECTING) {
+                        websocket.close();
+                        updateConnectionStatus('disconnected');
+                        addLog('Connection timeout - please check server and try again', 'error');
+                    }
+                }, 30000); // 30 second timeout
 
                 websocket.onopen = function(event) {
+                    clearTimeout(connectionTimeout);
                     updateConnectionStatus('connected');
                     addLog('WebSocket connection established', 'success');
                 };
@@ -208,6 +218,15 @@
             addLog(`Received: ${JSON.stringify(message)}`, 'info');
             
             switch (message.type) {
+                case 'ping':
+                    // Respond to server ping with pong
+                    try {
+                        websocket.send(JSON.stringify({type: 'pong'}));
+                        addLog('Sent pong response to server ping', 'debug');
+                    } catch (error) {
+                        addLog(`Error sending pong: ${error.message}`, 'error');
+                    }
+                    break;
                 case 'start':
                     currentSegmentId = message.segment_id;
                     isReceivingAudio = true;

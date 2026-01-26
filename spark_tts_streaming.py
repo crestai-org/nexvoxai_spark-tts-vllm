@@ -5,6 +5,7 @@ import numpy as np
 import re
 import json
 import asyncio
+import time
 from typing import List, Optional
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
@@ -344,10 +345,31 @@ async def websocket_audio_stream(websocket: WebSocket):
     await websocket.accept()
     print("WebSocket connection established")
     
-    try:
+    # Set up ping/pong for connection health monitoring
+    ping_task = None
+    last_activity = time.time()
+    
+    async def ping_loop():
+        """Send periodic pings to keep connection alive."""
+        nonlocal last_activity
         while True:
             try:
-                data = await websocket.receive_text()
+                await asyncio.sleep(30)  # Ping every 30 seconds
+                if time.time() - last_activity > 60:  # No activity for 1 minute
+                    print("Connection idle, sending ping")
+                    await websocket.send_json({"type": "ping"})
+                    last_activity = time.time()
+            except Exception:
+                break
+    
+    try:
+        ping_task = asyncio.create_task(ping_loop())
+        
+        while True:
+            try:
+                # Set a reasonable timeout for receiving messages
+                data = await asyncio.wait_for(websocket.receive_text(), timeout=300)  # 5 minutes
+                last_activity = time.time()
                 message = json.loads(data)
                 
                 text = message.get("input", "")
@@ -373,28 +395,41 @@ async def websocket_audio_stream(websocket: WebSocket):
                         "speaker_id": speaker_id
                     })
                     
-                    # Stream audio chunks immediately as they're generated
+                    # Stream audio chunks continuously for the session
                     chunk_count = 0
-                    async_generator = generate_audio_chunks_async(
-                        text=text,
-                        speaker_id=speaker_id,
-                        temperature=temperature
-                    )
-                    
-                    # Process chunks one by one for real-time streaming
-                    async for audio_chunk in async_generator:
-                        chunk_count += 1
-                        print(f"Immediately sending audio chunk {chunk_count}: {len(audio_chunk)} bytes")
-                        await websocket.send_bytes(audio_chunk)
-                        print(f"Audio chunk {chunk_count} sent and played immediately")
+                    try:
+                        async_generator = generate_audio_chunks_async(
+                            text=text,
+                            speaker_id=speaker_id,
+                            temperature=temperature
+                        )
+                        
+                        # Process all chunks without timeout - let the session stay open
+                        async for audio_chunk in async_generator:
+                            chunk_count += 1
+                            print(f"Immediately sending audio chunk {chunk_count}: {len(audio_chunk)} bytes")
+                            await websocket.send_bytes(audio_chunk)
+                            print(f"Audio chunk {chunk_count} sent and played immediately")
+                            last_activity = time.time()
+                                
+                    except Exception as e:
+                        print(f"Error during audio generation: {e}")
+                        await websocket.send_json({
+                            "type": "error",
+                            "message": f"Audio generation error: {str(e)}"
+                        })
+                        continue
                     
                     print(f"Finished streaming {chunk_count} audio chunks, sending end message")
-                    # Send end message
+                    # Send end message but keep session open for more sentences
                     await websocket.send_json({
                         "type": "end",
                         "segment_id": segment_id
                     })
                     
+            except asyncio.TimeoutError:
+                print("Client timeout, closing connection")
+                break
             except WebSocketDisconnect:
                 print("Client disconnected")
                 break
@@ -408,6 +443,12 @@ async def websocket_audio_stream(websocket: WebSocket):
     except Exception as e:
         print(f"WebSocket error: {e}")
     finally:
+        if ping_task:
+            ping_task.cancel()
+            try:
+                await ping_task
+            except asyncio.CancelledError:
+                pass
         print("WebSocket connection closed")
 
 
@@ -494,5 +535,8 @@ if __name__ == "__main__":
         "spark_tts_streaming:app",
         host="0.0.0.0",
         port=8000,
-        reload=False
+        reload=False,
+        ws_ping_interval=20,
+        ws_ping_timeout=20,
+        timeout_keep_alive=300
     )
