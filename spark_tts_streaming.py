@@ -843,6 +843,9 @@ async def voice_cloning_upload(
     temp_fd, temp_path = tempfile.mkstemp(suffix='.wav')
     os.close(temp_fd)
     
+    # Flag to track if cleanup should be deferred
+    defer_cleanup = False
+    
     try:
         # Save uploaded audio to temporary file
         print(f"Saving uploaded audio to: {temp_path}")
@@ -885,6 +888,9 @@ async def voice_cloning_upload(
             error_msg = f"Cannot read saved audio file: {str(e)}"
             print(f"ERROR: {error_msg}")
             return {"error": error_msg}
+        
+        # Defer cleanup to the streaming function
+        defer_cleanup = True
         
         async def stream_cloned_pcm():
             loop = asyncio.get_running_loop()
@@ -951,6 +957,12 @@ async def voice_cloning_upload(
         import traceback
         traceback.print_exc()
         return {"error": error_msg}
+        
+    finally:
+        # Only clean up if not deferred to streaming function
+        if not defer_cleanup and os.path.exists(temp_path):
+            os.unlink(temp_path)
+            print(f"Cleaned up temporary file: {temp_path}")
 
 
 @app.post("/v1/audio/speech/clone/debug")
