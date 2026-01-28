@@ -810,10 +810,32 @@ async def voice_cloning_upload(
     """
     print(f"Received voice cloning upload request for: '{text[:50]}...'")
     print(f"Reference audio file: {reference_audio.filename}, size: {reference_audio.size}")
+    print(f"Reference text: {reference_text}")
+    print(f"Temperature: {temperature}")
+    
+    # Validate text
+    if not text or not text.strip():
+        error_msg = "Text parameter is required and cannot be empty"
+        print(f"ERROR: {error_msg}")
+        return {"error": error_msg}
+    
+    # Validate file
+    if not reference_audio or not reference_audio.filename:
+        error_msg = "Reference audio file is required"
+        print(f"ERROR: {error_msg}")
+        return {"error": error_msg}
     
     # Validate file type
-    if not reference_audio.filename or not reference_audio.filename.lower().endswith(('.wav', '.mp3', '.m4a', '.flac', '.ogg')):
-        error_msg = f"Invalid audio file format: {reference_audio.filename}"
+    allowed_extensions = ['.wav', '.mp3', '.m4a', '.flac', '.ogg']
+    file_ext = os.path.splitext(reference_audio.filename)[1].lower()
+    if file_ext not in allowed_extensions:
+        error_msg = f"Invalid audio file format: {file_ext}. Allowed formats: {', '.join(allowed_extensions)}"
+        print(f"ERROR: {error_msg}")
+        return {"error": error_msg}
+    
+    # Validate temperature
+    if not 0.0 <= temperature <= 1.0:
+        error_msg = f"Temperature must be between 0.0 and 1.0, got: {temperature}"
         print(f"ERROR: {error_msg}")
         return {"error": error_msg}
     
@@ -824,8 +846,14 @@ async def voice_cloning_upload(
     try:
         # Save uploaded audio to temporary file
         print(f"Saving uploaded audio to: {temp_path}")
+        content = await reference_audio.read()
+        
+        if not content:
+            error_msg = "Uploaded audio file is empty"
+            print(f"ERROR: {error_msg}")
+            return {"error": error_msg}
+        
         with open(temp_path, "wb") as f:
-            content = await reference_audio.read()
             f.write(content)
         
         print(f"Audio file saved, size: {len(content)} bytes")
@@ -882,6 +910,13 @@ async def voice_cloning_upload(
                 "X-Voice-Cloning": "true"
             }
         )
+        
+    except Exception as e:
+        error_msg = f"Error processing upload: {str(e)}"
+        print(f"ERROR: {error_msg}")
+        import traceback
+        traceback.print_exc()
+        return {"error": error_msg}
         
     finally:
         # Clean up temporary file
