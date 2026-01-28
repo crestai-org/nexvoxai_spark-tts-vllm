@@ -244,57 +244,99 @@ def text_to_speech_cloned(
     device="cuda"
 ):
     '''Create a wav array using zero-shot voice cloning from reference audio.'''
-    texts = chunk_text_simple(text)
-    texts = [t.strip() for t in texts if len(t.strip()) > 0]
-    
-    sampling_params = SamplingParams(temperature=temperature, max_tokens=2048)
-    
-    # 1. Extract speaker identity from reference
-    print("Extracting speaker features from reference audio...")
-    global_ids_ref, semantic_ids_ref = extract_speaker_from_reference(
-        reference_audio_path, audio_tokenizer, reference_text, device
-    )
-    
-    # Convert to list for prompt formatting
-    global_ids_list = global_ids_ref.cpu().tolist()
-    if isinstance(global_ids_list, int):
-        global_ids_list = [global_ids_list]
-    
-    print(f"Extracted {len(global_ids_list)} global tokens from reference")
-    
-    prompts = []
-    for chunk in texts:
-        # Build prompt with reference global tokens
-        prompt = f"<|task_tts|><|start_content|>{chunk}<|end_content|><|start_global_token|>"
-        prompt += ''.join([f'<|bicodec_global_{t}|>' for t in global_ids_list]) 
-        prompt += '<|end_global_token|><|start_semantic_token|>'
-        prompts.append(prompt)
-    
-    print("Generating speech...")
-    outputs = model.generate(
-        prompts=prompts,
-        sampling_params=sampling_params
-    )
-    
-    speech_segments = []
-    
-    for i in range(len(outputs)):
-        predicted_tokens = outputs[i].outputs[0].text
-        semantic_matches = re.findall(r"<\|bicodec_semantic_(\d+)\|>", predicted_tokens)
-        if not semantic_matches:
-            raise ValueError("No semantic tokens found in output.")
+    try:
+        print(f"Starting voice cloning for text: '{text[:50]}...'")
+        print(f"Reference audio path: {reference_audio_path}")
         
-        pred_semantic_ids = torch.tensor([int(t) for t in semantic_matches]).long().unsqueeze(0)
-        pred_global_ids = torch.tensor([global_ids_list]).long()
+        texts = chunk_text_simple(text)
+        texts = [t.strip() for t in texts if len(t.strip()) > 0]
+        print(f"Text split into {len(texts)} chunks: {texts}")
         
-        wav_np = audio_tokenizer.detokenize(
-            pred_global_ids.to(device),
-            pred_semantic_ids.to(device)
-        )
-        speech_segments.append(wav_np)
-    
-    result_wav = np.concatenate(speech_segments)
-    return result_wav
+        if not texts:
+            raise ValueError("No valid text chunks found after processing")
+        
+        sampling_params = SamplingParams(temperature=temperature, max_tokens=2048)
+        
+        # 1. Extract speaker identity from reference
+        print("Extracting speaker features from reference audio...")
+        try:
+            global_ids_ref, semantic_ids_ref = extract_speaker_from_reference(
+                reference_audio_path, audio_tokenizer, reference_text, device
+            )
+            print(f"Successfully extracted speaker features")
+            print(f"Global IDs shape: {global_ids_ref.shape}, Semantic IDs shape: {semantic_ids_ref.shape}")
+        except Exception as e:
+            raise ValueError(f"Failed to extract speaker features from reference audio: {str(e)}")
+        
+        # Convert to list for prompt formatting
+        global_ids_list = global_ids_ref.cpu().tolist()
+        if isinstance(global_ids_list, int):
+            global_ids_list = [global_ids_list]
+        
+        print(f"Extracted {len(global_ids_list)} global tokens from reference")
+        
+        prompts = []
+        for i, chunk in enumerate(texts):
+            # Build prompt with reference global tokens
+            prompt = f"<|task_tts|><|start_content|>{chunk}<|end_content|><|start_global_token|>"
+            prompt += ''.join([f'<|bicodec_global_{t}|>' for t in global_ids_list]) 
+            prompt += '<|end_global_token|><|start_semantic_token|>'
+            prompts.append(prompt)
+            print(f"Generated prompt {i+1}/{len(texts)}: {prompt[:100]}...")
+        
+        print("Generating speech with model...")
+        try:
+            outputs = model.generate(
+                prompts=prompts,
+                sampling_params=sampling_params
+            )
+            print(f"Model generation completed. Generated {len(outputs)} outputs")
+        except Exception as e:
+            raise ValueError(f"Model generation failed: {str(e)}")
+        
+        speech_segments = []
+        
+        for i, output in enumerate(outputs):
+            print(f"Processing output {i+1}/{len(outputs)}")
+            predicted_tokens = output.outputs[0].text
+            print(f"Raw model output: {predicted_tokens[:200]}...")
+            
+            semantic_matches = re.findall(r"<\|bicodec_semantic_(\d+)\|>", predicted_tokens)
+            print(f"Found {len(semantic_matches)} semantic tokens")
+            
+            if not semantic_matches:
+                raise ValueError(f"No semantic tokens found in output {i+1}. Raw output: {predicted_tokens}")
+            
+            try:
+                pred_semantic_ids = torch.tensor([int(t) for t in semantic_matches]).long().unsqueeze(0)
+                pred_global_ids = torch.tensor([global_ids_list]).long()
+                
+                print(f"Detokenizing audio: semantic shape={pred_semantic_ids.shape}, global shape={pred_global_ids.shape}")
+                
+                wav_np = audio_tokenizer.detokenize(
+                    pred_global_ids.to(device),
+                    pred_semantic_ids.to(device)
+                )
+                
+                print(f"Generated audio segment {i+1}: shape={wav_np.shape}")
+                speech_segments.append(wav_np)
+                
+            except Exception as e:
+                raise ValueError(f"Audio detokenization failed for segment {i+1}: {str(e)}")
+        
+        if not speech_segments:
+            raise ValueError("No speech segments were generated")
+        
+        result_wav = np.concatenate(speech_segments)
+        print(f"Successfully concatenated {len(speech_segments)} segments. Final shape: {result_wav.shape}")
+        
+        return result_wav
+        
+    except Exception as e:
+        print(f"ERROR in text_to_speech_cloned: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise
 
 
 def initialize_models():
@@ -763,12 +805,16 @@ async def voice_cloning_http(request: VoiceCloningRequest):
     
     # Validate reference audio file exists
     if not os.path.exists(request.reference_audio_path):
-        return {"error": f"Reference audio file not found: {request.reference_audio_path}"}
+        error_msg = f"Reference audio file not found: {request.reference_audio_path}"
+        print(f"ERROR: {error_msg}")
+        return {"error": error_msg}
     
     async def stream_cloned_pcm():
         loop = asyncio.get_running_loop()
         
         try:
+            print("Starting voice cloning process...")
+            
             # Generate cloned audio in thread pool
             result_wav = await loop.run_in_executor(
                 None,
@@ -782,21 +828,28 @@ async def voice_cloning_http(request: VoiceCloningRequest):
                 device
             )
             
+            print(f"Voice cloning completed. Generated audio shape: {result_wav.shape}")
+            
             # Convert to PCM bytes
             pcm_bytes = convert_to_pcm16_bytes(result_wav)
             
-            print(f"Generated cloned audio: {len(result_wav)} samples, {len(pcm_bytes)} bytes")
+            print(f"Converted to PCM: {len(result_wav)} samples, {len(pcm_bytes)} bytes")
             
             if len(pcm_bytes) > 0:
                 yield pcm_bytes
+                print(f"Successfully yielded {len(pcm_bytes)} bytes of audio data")
             else:
-                print("Warning: Generated empty cloned audio data")
+                error_msg = "Warning: Generated empty cloned audio data"
+                print(f"ERROR: {error_msg}")
+                raise ValueError(error_msg)
                 
         except Exception as e:
-            print(f"Error during voice cloning: {e}")
+            error_msg = f"Error during voice cloning: {str(e)}"
+            print(f"ERROR: {error_msg}")
             import traceback
             traceback.print_exc()
-            raise
+            # Return error as JSON instead of raising exception
+            yield json.dumps({"error": error_msg}).encode()
     
     return StreamingResponse(
         stream_cloned_pcm(),
