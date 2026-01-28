@@ -10,7 +10,7 @@ import librosa
 import tempfile
 import soundfile as sf
 from typing import List, Optional
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import uvicorn
@@ -789,6 +789,107 @@ async def http_audio_stream(request: AudioRequest):
     )
 
 
+@app.post("/v1/audio/speech/clone/upload")
+async def voice_cloning_upload(
+    text: str = Form(...),
+    reference_audio: UploadFile = File(...),
+    reference_text: Optional[str] = Form(None),
+    temperature: float = Form(DEFAULT_TEMPERATURE)
+):
+    """
+    Voice cloning endpoint that accepts reference audio as file upload.
+    
+    Args:
+        text: Text to synthesize
+        reference_audio: Audio file for voice cloning
+        reference_text: Optional transcript of reference audio
+        temperature: Controls randomness (0.0-1.0)
+    
+    Returns:
+        StreamingResponse with PCM audio data
+    """
+    print(f"Received voice cloning upload request for: '{text[:50]}...'")
+    print(f"Reference audio file: {reference_audio.filename}, size: {reference_audio.size}")
+    
+    # Validate file type
+    if not reference_audio.filename or not reference_audio.filename.lower().endswith(('.wav', '.mp3', '.m4a', '.flac', '.ogg')):
+        error_msg = f"Invalid audio file format: {reference_audio.filename}"
+        print(f"ERROR: {error_msg}")
+        return {"error": error_msg}
+    
+    # Create temporary file for uploaded audio
+    temp_fd, temp_path = tempfile.mkstemp(suffix='.wav')
+    os.close(temp_fd)
+    
+    try:
+        # Save uploaded audio to temporary file
+        print(f"Saving uploaded audio to: {temp_path}")
+        with open(temp_path, "wb") as f:
+            content = await reference_audio.read()
+            f.write(content)
+        
+        print(f"Audio file saved, size: {len(content)} bytes")
+        
+        async def stream_cloned_pcm():
+            loop = asyncio.get_running_loop()
+            
+            try:
+                print("Starting voice cloning process with uploaded audio...")
+                
+                # Generate cloned audio in thread pool
+                result_wav = await loop.run_in_executor(
+                    None,
+                    text_to_speech_cloned,
+                    text,
+                    audio_tokenizer,
+                    vllm_model,
+                    temp_path,
+                    reference_text,
+                    temperature,
+                    device
+                )
+                
+                print(f"Voice cloning completed. Generated audio shape: {result_wav.shape}")
+                
+                # Convert to PCM bytes
+                pcm_bytes = convert_to_pcm16_bytes(result_wav)
+                
+                print(f"Converted to PCM: {len(result_wav)} samples, {len(pcm_bytes)} bytes")
+                
+                if len(pcm_bytes) > 0:
+                    yield pcm_bytes
+                    print(f"Successfully yielded {len(pcm_bytes)} bytes of audio data")
+                else:
+                    error_msg = "Warning: Generated empty cloned audio data"
+                    print(f"ERROR: {error_msg}")
+                    raise ValueError(error_msg)
+                    
+            except Exception as e:
+                error_msg = f"Error during voice cloning: {str(e)}"
+                print(f"ERROR: {error_msg}")
+                import traceback
+                traceback.print_exc()
+                # Return error as JSON instead of raising exception
+                yield json.dumps({"error": error_msg}).encode()
+        
+        return StreamingResponse(
+            stream_cloned_pcm(),
+            media_type="audio/pcm",
+            headers={
+                "X-Sample-Rate": str(AUDIO_SAMPLERATE),
+                "X-Bit-Depth": str(AUDIO_BITS_PER_SAMPLE),
+                "X-Channels": str(AUDIO_CHANNELS),
+                "X-Voice-Cloning": "true"
+            }
+        )
+        
+    finally:
+        # Clean up temporary file
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
+            print(f"Cleaned up temporary file: {temp_path}")
+
+
 @app.post("/v1/audio/speech/clone")
 async def voice_cloning_http(request: VoiceCloningRequest):
     """
@@ -877,6 +978,7 @@ async def read_root():
             "http": "/v1/audio/speech/stream",
             "voice_cloning_websocket": "/v1/audio/speech/clone/ws",
             "voice_cloning_http": "/v1/audio/speech/clone",
+            "voice_cloning_upload": "/v1/audio/speech/clone/upload",
             "voices": "/v1/voices"
         },
         "example_usage": {
