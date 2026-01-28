@@ -925,6 +925,37 @@ async def voice_cloning_upload(
             print(f"Cleaned up temporary file: {temp_path}")
 
 
+@app.post("/v1/audio/speech/clone/debug")
+async def voice_cloning_debug(
+    text: Optional[str] = Form(None),
+    reference_audio: Optional[UploadFile] = File(None),
+    reference_text: Optional[str] = Form(None),
+    temperature: Optional[float] = Form(None)
+):
+    """
+    Debug endpoint to test form data parsing without processing.
+    """
+    print("=== DEBUG ENDPOINT CALLED ===")
+    print(f"Text: {text}")
+    print(f"Reference audio: {reference_audio}")
+    if reference_audio:
+        print(f"  - Filename: {reference_audio.filename}")
+        print(f"  - Size: {reference_audio.size}")
+        print(f"  - Content type: {reference_audio.content_type}")
+    print(f"Reference text: {reference_text}")
+    print(f"Temperature: {temperature}")
+    print("=== END DEBUG ===")
+    
+    return {
+        "message": "Debug endpoint received data",
+        "text": text,
+        "reference_audio_filename": reference_audio.filename if reference_audio else None,
+        "reference_audio_size": reference_audio.size if reference_audio else None,
+        "reference_text": reference_text,
+        "temperature": temperature
+    }
+
+
 @app.post("/v1/audio/speech/clone")
 async def voice_cloning_http(request: VoiceCloningRequest):
     """
