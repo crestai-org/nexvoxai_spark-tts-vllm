@@ -951,12 +951,6 @@ async def voice_cloning_upload(
         import traceback
         traceback.print_exc()
         return {"error": error_msg}
-        
-    finally:
-        # Clean up temporary file
-        if os.path.exists(temp_path):
-            os.unlink(temp_path)
-            print(f"Cleaned up temporary file: {temp_path}")
 
 
 @app.post("/v1/audio/speech/clone/debug")
