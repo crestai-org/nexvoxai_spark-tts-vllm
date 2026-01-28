@@ -6,6 +6,9 @@ import re
 import json
 import asyncio
 import time
+import librosa
+import tempfile
+import soundfile as sf
 from typing import List, Optional
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
@@ -91,6 +94,14 @@ class AudioRequest(BaseModel):
     max_tokens: int = DEFAULT_MAX_TOKENS
 
 
+class VoiceCloningRequest(BaseModel):
+    text: str
+    reference_audio_path: str
+    reference_text: Optional[str] = None
+    temperature: float = DEFAULT_TEMPERATURE
+    max_tokens: int = DEFAULT_MAX_TOKENS
+
+
 def chunk_text(text: str, max_chunk_size: int = 500) -> List[str]:
     """
     Split text into chunks based on sentence boundaries.
@@ -171,6 +182,119 @@ def chunk_text_with_count(text: str, sentences_per_chunk: int = 3) -> List[str]:
         chunks.append(chunk)
     
     return chunks
+
+
+def extract_speaker_from_reference(
+    audio_path: str,
+    audio_tokenizer,
+    reference_text: str = None,
+    device="cuda"
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    Extract global and semantic tokens from a reference audio file.
+    Returns: (global_ids, semantic_ids)
+    """
+    # Load audio and resample to 16kHz if needed
+    wav, sr = sf.read(audio_path)
+    
+    # Resample if not 16kHz
+    if sr != 16000:
+        print(f"Resampling audio from {sr}Hz to 16000Hz...")
+        wav = librosa.resample(wav, orig_sr=sr, target_sr=16000)
+        
+        # Save resampled audio to a temporary file
+        temp_fd, temp_path = tempfile.mkstemp(suffix='.wav')
+        os.close(temp_fd)  # Close the file descriptor
+        sf.write(temp_path, wav, 16000)
+        audio_path_to_use = temp_path
+    else:
+        audio_path_to_use = audio_path
+    
+    try:
+        # Tokenize reference audio using the file path
+        global_ids, semantic_ids = audio_tokenizer.tokenize(audio_path_to_use)
+        
+        # Convert to tensors if they aren't already
+        if not isinstance(global_ids, torch.Tensor):
+            global_ids = torch.tensor(global_ids).long()
+        if not isinstance(semantic_ids, torch.Tensor):
+            semantic_ids = torch.tensor(semantic_ids).long()
+        
+        # Ensure they're 1D tensors
+        if global_ids.dim() > 1:
+            global_ids = global_ids.squeeze()
+        if semantic_ids.dim() > 1:
+            semantic_ids = semantic_ids.squeeze()
+            
+        return global_ids, semantic_ids
+        
+    finally:
+        # Clean up temporary file if we created one
+        if sr != 16000 and os.path.exists(temp_path):
+            os.unlink(temp_path)
+
+
+def text_to_speech_cloned(
+    text: str,
+    audio_tokenizer,
+    model,
+    reference_audio_path: str,
+    reference_text: str = None,
+    temperature: float = 0.7,
+    device="cuda"
+):
+    '''Create a wav array using zero-shot voice cloning from reference audio.'''
+    texts = chunk_text_simple(text)
+    texts = [t.strip() for t in texts if len(t.strip()) > 0]
+    
+    sampling_params = SamplingParams(temperature=temperature, max_tokens=2048)
+    
+    # 1. Extract speaker identity from reference
+    print("Extracting speaker features from reference audio...")
+    global_ids_ref, semantic_ids_ref = extract_speaker_from_reference(
+        reference_audio_path, audio_tokenizer, reference_text, device
+    )
+    
+    # Convert to list for prompt formatting
+    global_ids_list = global_ids_ref.cpu().tolist()
+    if isinstance(global_ids_list, int):
+        global_ids_list = [global_ids_list]
+    
+    print(f"Extracted {len(global_ids_list)} global tokens from reference")
+    
+    prompts = []
+    for chunk in texts:
+        # Build prompt with reference global tokens
+        prompt = f"<|task_tts|><|start_content|>{chunk}<|end_content|><|start_global_token|>"
+        prompt += ''.join([f'<|bicodec_global_{t}|>' for t in global_ids_list]) 
+        prompt += '<|end_global_token|><|start_semantic_token|>'
+        prompts.append(prompt)
+    
+    print("Generating speech...")
+    outputs = model.generate(
+        prompts=prompts,
+        sampling_params=sampling_params
+    )
+    
+    speech_segments = []
+    
+    for i in range(len(outputs)):
+        predicted_tokens = outputs[i].outputs[0].text
+        semantic_matches = re.findall(r"<\|bicodec_semantic_(\d+)\|>", predicted_tokens)
+        if not semantic_matches:
+            raise ValueError("No semantic tokens found in output.")
+        
+        pred_semantic_ids = torch.tensor([int(t) for t in semantic_matches]).long().unsqueeze(0)
+        pred_global_ids = torch.tensor([global_ids_list]).long()
+        
+        wav_np = audio_tokenizer.detokenize(
+            pred_global_ids.to(device),
+            pred_semantic_ids.to(device)
+        )
+        speech_segments.append(wav_np)
+    
+    result_wav = np.concatenate(speech_segments)
+    return result_wav
 
 
 def initialize_models():
@@ -452,6 +576,146 @@ async def websocket_audio_stream(websocket: WebSocket):
         print("WebSocket connection closed")
 
 
+@app.websocket("/v1/audio/speech/clone/ws")
+async def websocket_voice_cloning(websocket: WebSocket):
+    """
+    WebSocket endpoint for voice cloning streaming.
+    
+    Protocol:
+    - Client sends JSON: {"input": "text", "reference_audio_path": "path/to/audio.wav", "reference_text": "optional", "temperature": 0.7, "segment_id": "id"}
+    - Server sends: {"type": "start", "segment_id": "id"} followed by binary audio chunks
+    - Server sends: {"type": "end", "segment_id": "id"} when segment complete
+    """
+    await websocket.accept()
+    print("Voice cloning WebSocket connection established")
+    
+    # Set up ping/pong for connection health monitoring
+    ping_task = None
+    last_activity = time.time()
+    
+    async def ping_loop():
+        """Send periodic pings to keep connection alive."""
+        nonlocal last_activity
+        while True:
+            try:
+                await asyncio.sleep(30)  # Ping every 30 seconds
+                if time.time() - last_activity > 60:  # No activity for 1 minute
+                    print("Connection idle, sending ping")
+                    await websocket.send_json({"type": "ping"})
+                    last_activity = time.time()
+            except Exception:
+                break
+    
+    try:
+        ping_task = asyncio.create_task(ping_loop())
+        
+        while True:
+            try:
+                # Set a reasonable timeout for receiving messages
+                data = await asyncio.wait_for(websocket.receive_text(), timeout=300)  # 5 minutes
+                last_activity = time.time()
+                message = json.loads(data)
+                
+                text = message.get("input", "")
+                reference_audio_path = message.get("reference_audio_path", "")
+                reference_text = message.get("reference_text")
+                temperature = message.get("temperature", DEFAULT_TEMPERATURE)
+                segment_id = message.get("segment_id", "default")
+                
+                if not text:
+                    print("Received empty text, skipping")
+                    continue
+                
+                if not reference_audio_path:
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": "reference_audio_path is required for voice cloning"
+                    })
+                    continue
+                
+                # Validate reference audio file exists
+                if not os.path.exists(reference_audio_path):
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": f"Reference audio file not found: {reference_audio_path}"
+                    })
+                    continue
+                
+                # Send start message
+                await websocket.send_json({
+                    "type": "start",
+                    "segment_id": segment_id,
+                    "reference_audio": reference_audio_path
+                })
+                
+                # Generate cloned audio
+                try:
+                    loop = asyncio.get_running_loop()
+                    
+                    # Generate cloned audio in thread pool
+                    result_wav = await loop.run_in_executor(
+                        None,
+                        text_to_speech_cloned,
+                        text,
+                        audio_tokenizer,
+                        vllm_model,
+                        reference_audio_path,
+                        reference_text,
+                        temperature,
+                        device
+                    )
+                    
+                    # Convert to PCM bytes
+                    pcm_bytes = convert_to_pcm16_bytes(result_wav)
+                    
+                    print(f"Generated cloned audio: {len(result_wav)} samples, {len(pcm_bytes)} bytes")
+                    
+                    if len(pcm_bytes) > 0:
+                        # Send audio data
+                        await websocket.send_bytes(pcm_bytes)
+                        print(f"Cloned audio sent for segment {segment_id}")
+                    else:
+                        print("Warning: Generated empty cloned audio data")
+                        
+                except Exception as e:
+                    print(f"Error during voice cloning: {e}")
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": f"Voice cloning error: {str(e)}"
+                    })
+                    continue
+                
+                # Send end message
+                await websocket.send_json({
+                    "type": "end",
+                    "segment_id": segment_id
+                })
+                    
+            except asyncio.TimeoutError:
+                print("Client timeout, closing connection")
+                break
+            except WebSocketDisconnect:
+                print("Client disconnected")
+                break
+            except json.JSONDecodeError:
+                print("Invalid JSON received")
+                await websocket.send_json({"type": "error", "message": "Invalid JSON"})
+            except Exception as e:
+                print(f"Error processing message: {e}")
+                await websocket.send_json({"type": "error", "message": str(e)})
+                
+    except Exception as e:
+        print(f"WebSocket error: {e}")
+    finally:
+        if ping_task:
+            ping_task.cancel()
+            try:
+                await ping_task
+            except asyncio.CancelledError:
+                pass
+        print("Voice cloning WebSocket connection closed")
+
+
 @app.post("/v1/audio/speech/stream")
 async def http_audio_stream(request: AudioRequest):
     """
@@ -483,21 +747,88 @@ async def http_audio_stream(request: AudioRequest):
     )
 
 
+@app.post("/v1/audio/speech/clone")
+async def voice_cloning_http(request: VoiceCloningRequest):
+    """
+    HTTP endpoint for voice cloning using reference audio.
+    
+    Args:
+        request: VoiceCloningRequest containing text, reference audio path, and parameters
+    
+    Returns:
+        StreamingResponse with PCM audio data
+    """
+    print(f"Received voice cloning request for: '{request.text[:50]}...'")
+    print(f"Reference audio: {request.reference_audio_path}")
+    
+    # Validate reference audio file exists
+    if not os.path.exists(request.reference_audio_path):
+        return {"error": f"Reference audio file not found: {request.reference_audio_path}"}
+    
+    async def stream_cloned_pcm():
+        loop = asyncio.get_running_loop()
+        
+        try:
+            # Generate cloned audio in thread pool
+            result_wav = await loop.run_in_executor(
+                None,
+                text_to_speech_cloned,
+                request.text,
+                audio_tokenizer,
+                vllm_model,
+                request.reference_audio_path,
+                request.reference_text,
+                request.temperature,
+                device
+            )
+            
+            # Convert to PCM bytes
+            pcm_bytes = convert_to_pcm16_bytes(result_wav)
+            
+            print(f"Generated cloned audio: {len(result_wav)} samples, {len(pcm_bytes)} bytes")
+            
+            if len(pcm_bytes) > 0:
+                yield pcm_bytes
+            else:
+                print("Warning: Generated empty cloned audio data")
+                
+        except Exception as e:
+            print(f"Error during voice cloning: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
+    
+    return StreamingResponse(
+        stream_cloned_pcm(),
+        media_type="audio/pcm",
+        headers={
+            "X-Sample-Rate": str(AUDIO_SAMPLERATE),
+            "X-Bit-Depth": str(AUDIO_BITS_PER_SAMPLE),
+            "X-Channels": str(AUDIO_CHANNELS),
+            "X-Voice-Cloning": "true"
+        }
+    )
+
+
 @app.get("/")
 async def read_root():
     """Root endpoint with API information."""
     return {
-        "message": "Spark TTS Streaming API",
+        "message": "Spark TTS Streaming API with Voice Cloning",
         "model": MODEL_NAME,
         "sample_rate": AUDIO_SAMPLERATE,
         "available_voices": list(SPEAKER_IDS.keys()),
+        "features": ["text-to-speech", "voice-cloning", "streaming"],
         "endpoints": {
             "websocket": "/v1/audio/speech/stream/ws",
-            "http": "/v1/audio/speech/stream"
+            "http": "/v1/audio/speech/stream",
+            "voice_cloning_websocket": "/v1/audio/speech/clone/ws",
+            "voice_cloning_http": "/v1/audio/speech/clone",
+            "voices": "/v1/voices"
         },
         "example_usage": {
             "websocket": {
-                "connect": "ws://localhost:8001/v1/audio/speech/stream/ws",
+                "connect": "ws://localhost:8000/v1/audio/speech/stream/ws",
                 "send": {
                     "input": "Your text here",
                     "voice": "luganda_female",
@@ -511,6 +842,39 @@ async def read_root():
                     "voice": "luganda_female",
                     "temperature": 0.7
                 }
+            },
+            "voice_cloning_websocket": {
+                "connect": "ws://localhost:8000/v1/audio/speech/clone/ws",
+                "send": {
+                    "input": "Your text here",
+                    "reference_audio_path": "/path/to/reference.wav",
+                    "reference_text": "Optional transcript of reference audio",
+                    "temperature": 0.7,
+                    "segment_id": "clone_segment_1"
+                }
+            },
+            "voice_cloning_http": {
+                "url": "POST /v1/audio/speech/clone",
+                "body": {
+                    "text": "Your text here",
+                    "reference_audio_path": "/path/to/reference.wav",
+                    "reference_text": "Optional transcript of reference audio",
+                    "temperature": 0.7
+                }
+            }
+        },
+        "voice_cloning_info": {
+            "description": "Zero-shot voice cloning using reference audio",
+            "requirements": [
+                "Reference audio file must exist and be accessible",
+                "Audio will be automatically resampled to 16kHz",
+                "Supports WAV, MP3, and other audio formats"
+            ],
+            "parameters": {
+                "text": "Text to synthesize (required)",
+                "reference_audio_path": "Path to reference audio file (required)",
+                "reference_text": "Optional transcript of reference audio",
+                "temperature": "Controls randomness (0.0-1.0, default: 0.7)"
             }
         }
     }
