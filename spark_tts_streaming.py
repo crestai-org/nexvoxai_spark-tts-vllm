@@ -853,10 +853,38 @@ async def voice_cloning_upload(
             print(f"ERROR: {error_msg}")
             return {"error": error_msg}
         
+        print(f"Received audio content: {len(content)} bytes")
+        print(f"Content type: {reference_audio.content_type}")
+        
+        # Save the file
         with open(temp_path, "wb") as f:
             f.write(content)
         
         print(f"Audio file saved, size: {len(content)} bytes")
+        
+        # Verify the file exists and is readable
+        if not os.path.exists(temp_path):
+            error_msg = f"Failed to save temporary file: {temp_path}"
+            print(f"ERROR: {error_msg}")
+            return {"error": error_msg}
+        
+        # Check file size
+        file_size = os.path.getsize(temp_path)
+        print(f"Saved file size: {file_size} bytes")
+        
+        if file_size == 0:
+            error_msg = "Saved audio file is empty"
+            print(f"ERROR: {error_msg}")
+            return {"error": error_msg}
+        
+        # Test if the file can be read by soundfile
+        try:
+            test_wav, test_sr = sf.read(temp_path)
+            print(f"Successfully read test audio: shape={test_wav.shape}, sr={test_sr}")
+        except Exception as e:
+            error_msg = f"Cannot read saved audio file: {str(e)}"
+            print(f"ERROR: {error_msg}")
+            return {"error": error_msg}
         
         async def stream_cloned_pcm():
             loop = asyncio.get_running_loop()
@@ -899,6 +927,12 @@ async def voice_cloning_upload(
                 traceback.print_exc()
                 # Return error as JSON instead of raising exception
                 yield json.dumps({"error": error_msg}).encode()
+            
+            finally:
+                # Clean up temporary file AFTER voice cloning completes
+                if os.path.exists(temp_path):
+                    os.unlink(temp_path)
+                    print(f"Cleaned up temporary file: {temp_path}")
         
         return StreamingResponse(
             stream_cloned_pcm(),
@@ -1075,10 +1109,10 @@ async def read_root():
                 }
             },
             "voice_cloning_http": {
-                "url": "POST /v1/audio/speech/clone",
+                "url": "POST /v1/audio/speech/clone/upload",
                 "body": {
                     "text": "Your text here",
-                    "reference_audio_path": "/path/to/reference.wav",
+                    "reference_audio": "/path/to/reference.wav",
                     "reference_text": "Optional transcript of reference audio",
                     "temperature": 0.7
                 }
@@ -1093,7 +1127,7 @@ async def read_root():
             ],
             "parameters": {
                 "text": "Text to synthesize (required)",
-                "reference_audio_path": "Path to reference audio file (required)",
+                "reference_audio": "Reference audio file (required)",
                 "reference_text": "Optional transcript of reference audio",
                 "temperature": "Controls randomness (0.0-1.0, default: 0.7)"
             }
